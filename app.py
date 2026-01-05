@@ -8,122 +8,242 @@ import google.generativeai as genai
 import json
 
 # --- CONFIGURAÇÃO DA MARCA DOIS PÉS ---
-st.set_page_config(page_title="DoisPés", layout="mobile", page_icon="🦶")
+st.set_page_config(page_title="DoisPés", layout="centered", page_icon="🦶")
 
 # --- CONEXÃO SEGURA COM A NUVEM (SEGREDOS) ---
-if "FIREBASE_KEY" in st.secrets and "GEMINI_KEY" in st.secrets:
-    # 1. Configura a IA (Gemini)
-    genai.configure(api_key=st.secrets["GEMINI_KEY"])
-    
-    # 2. Configura o Banco (Firebase)
-    if not firebase_admin._apps:
-        key_dict = json.loads(st.secrets["FIREBASE_KEY"])
-        cred = credentials.Certificate(key_dict)
-        firebase_admin.initialize_app(cred)
-    
-    db = firestore.client()
-else:
+try:
+    if "FIREBASE_KEY" in st.secrets and "GEMINI_KEY" in st.secrets:
+        # Configura a IA
+        genai.configure(api_key=st.secrets["GEMINI_KEY"])
+        
+        # Configura o Banco
+        if not firebase_admin._apps:
+            key_dict = json.loads(st.secrets["FIREBASE_KEY"])
+            cred = credentials.Certificate(key_dict)
+            firebase_admin.initialize_app(cred)
+        
+        db = firestore.client()
+    else:
+        raise Exception("Chaves não encontradas")
+except Exception:
     st.warning("⚠️ Configuração pendente.")
     st.info("No Streamlit Cloud, vá em Settings > Secrets e adicione suas chaves.")
     st.stop()
 
-# --- FUNÇÕES DO SISTEMA ---
+# --- FUNÇÕES AUXILIARES ---
+
+def format_currency(value):
+    """Formata valor float para moeda BRL (R$ 1.000,00)"""
+    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def register_user(email, password, family_code):
     try:
-        # Cria o login
         user = auth.create_user(email=email, password=password)
-        # Cria o vínculo familiar no banco
+        # Cria profile inicial
         db.collection('users').document(user.uid).set({
             'email': email,
-            'family_id': family_code.upper().strip()
+            'family_id': family_code.upper().strip(),
+            'setup_completed': False  # Flag para ativar o Wizard
         })
-        st.success("✅ Conta criada! Acesse a aba 'Entrar'.")
+        st.success("✅ Conta criada! Faça login para continuar.")
     except Exception as e:
         st.error(f"Erro ao criar conta: {e}")
 
 def login_user(email):
-    # (Simplificado para uso pessoal confiável)
+    # ATENÇÃO: Autenticação simplificada para protótipo. 
     try:
         user = auth.get_user_by_email(email)
-        # Pega os dados da família
         doc = db.collection('users').document(user.uid).get()
+        
         if doc.exists:
+            data = doc.to_dict()
             st.session_state.user_id = user.uid
             st.session_state.email = user.email
-            st.session_state.family_id = doc.to_dict()['family_id']
+            st.session_state.family_id = data.get('family_id')
+            st.session_state.setup_completed = data.get('setup_completed', False)
             st.rerun()
         else:
-            st.error("Usuário sem código de família vinculado.")
+            st.error("Usuário sem registro no banco.")
     except:
-        st.error("Email não encontrado.")
+        st.error("Email não encontrado ou erro no login.")
 
-def add_transaction(tipo, valor, descricao, data, categoria):
-    # Salva no banco compartilhado
-    db.collection('transactions').add({
-        'family_id': st.session_state.family_id,
-        'user_name': st.session_state.email.split('@')[0], # Pega o nome antes do @
-        'type': tipo,
-        'value': float(valor),
-        'description': descricao,
-        'category': categoria,
-        'date': datetime.combine(data, datetime.min.time())
+def save_wizard_data(data):
+    uid = st.session_state.user_id
+    batch = db.batch()
+    
+    # 1. Update User Profile
+    user_ref = db.collection('users').document(uid)
+    batch.update(user_ref, {
+        'income': data['income'],
+        'initial_balance': data['initial_balance'],
+        'setup_completed': True
     })
-    st.toast("🦶 Lançamento salvo no DoisPés!")
-
-def get_data():
-    # Busca SÓ os dados da família logada
-    docs = db.collection('transactions').where("family_id", "==", st.session_state.family_id).stream()
-    data = [doc.to_dict() for doc in docs]
-    if data:
-        df = pd.DataFrame(data)
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date', ascending=False)
-    return pd.DataFrame()
-
-def get_ai_analysis(resumo_texto):
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"""
-    Você é o consultor financeiro do app 'DoisPés'. Analise os dados deste casal:
-    {resumo_texto}
     
-    Seja breve, direto e use emojis.
-    1. O casal está gastando mais do que ganha?
-    2. Qual categoria está consumindo mais dinheiro?
-    3. Dê uma dica curta e motivacional para eles guardarem dinheiro.
-    """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except:
-        return "A IA está descansando um pouco. Tente novamente."
-
-# --- TELA DE LOGIN / CADASTRO ---
-if 'user_id' not in st.session_state:
-    st.title("🦶🦶 DoisPés")
-    st.caption("Finanças a dois, futuro de milhões.")
-    
-    tab1, tab2 = st.tabs(["Entrar", "Nova Conta"])
-    
-    with tab1:
-        email = st.text_input("Seu Email")
-        if st.button("Acessar DoisPés"):
-            login_user(email)
-            
-    with tab2:
-        st.markdown("⚠️ **Importante:** Você e sua esposa devem usar o **MESMO** código abaixo.")
-        new_email = st.text_input("Email para cadastro")
-        new_pass = st.text_input("Senha (mín 6 dígitos)", type="password")
-        code = st.text_input("Código da Família (Ex: AMOR2026)")
+    # 2. Add Fixed Expenses
+    for item in data['fixed_expenses']:
+        ref = db.collection('recurring_expenses').document()
+        item['family_id'] = st.session_state.family_id
+        item['user_id'] = uid
+        batch.set(ref, item)
         
-        if st.button("Criar Cadastro"):
-            if len(new_pass) >= 6 and code:
-                register_user(new_email, new_pass, code)
-            else:
-                st.warning("Senha curta ou código vazio.")
+    # 3. Add Debts
+    for item in data['debts']:
+        ref = db.collection('debts').document()
+        item['family_id'] = st.session_state.family_id
+        item['user_id'] = uid
+        batch.set(ref, item)
+        
+    # 4. Add Initial Balance Transaction
+    if data['initial_balance'] > 0:
+        trans_ref = db.collection('transactions').document()
+        batch.set(trans_ref, {
+            'family_id': st.session_state.family_id,
+            'user_name': st.session_state.email.split('@')[0],
+            'type': 'Receita',
+            'value': float(data['initial_balance']),
+            'description': 'Saldo Inicial (Importado)',
+            'category': 'Saldo Inicial',
+            'date': datetime.now()
+        })
 
-# --- TELA PRINCIPAL (LOGADO) ---
-else:
+    batch.commit()
+    st.session_state.setup_completed = True
+    st.rerun()
+
+# --- WIZARD COMPONENTS ---
+
+def wizard_flow():
+    st.title("🚀 Configuração Inicial")
+    st.progress(st.session_state.get('wizard_step', 1) / 5)
+    
+    step = st.session_state.get('wizard_step', 1)
+    
+    # Inicializa storage do wizard
+    if 'wizard_data' not in st.session_state:
+        st.session_state.wizard_data = {
+            'fixed_expenses': [],
+            'debts': []
+        }
+
+    # --- PASSO 1: RENDA ---
+    if step == 1:
+        st.subheader("1. Vamos falar de dinheiro")
+        with st.form("step1"):
+            income = st.number_input("Quanto é a SUA renda mensal líquida?", min_value=0.0, step=100.0, format="%.2f")
+            initial_balance = st.number_input("Qual seu saldo TOTAL hoje (contas + bolso)?", min_value=0.0, step=50.0, format="%.2f")
+            
+            if st.form_submit_button("Próximo ➡️"):
+                st.session_state.wizard_data['income'] = income
+                st.session_state.wizard_data['initial_balance'] = initial_balance
+                st.session_state.wizard_step = 2
+                st.rerun()
+
+    # --- PASSO 2: CONTAS FIXAS ---
+    elif step == 2:
+        st.subheader("2. Contas Fixas (Obrigatórias)")
+        st.caption("Adicione contas como Aluguel, Luz, Internet, Netflix.")
+        
+        # Editor de dados para listas
+        if 'df_fixed' not in st.session_state:
+            st.session_state.df_fixed = pd.DataFrame(columns=["Descrição", "Valor", "Dia Vencimento"])
+
+        edited_df = st.data_editor(
+            st.session_state.df_fixed, 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config={
+                "Valor": st.column_config.NumberColumn(
+                    "Valor (R$)",
+                    help="Valor mensal da conta",
+                    min_value=0,
+                    step=0.01,
+                    format="R$ %.2f"
+                ),
+                "Dia Vencimento": st.column_config.NumberColumn(
+                    "Vencimento",
+                    min_value=1,
+                    max_value=31,
+                    step=1,
+                    format="%d"
+                )
+            }
+        )
+        
+        col1, col2 = st.columns([1, 3])
+        if col1.button("⬅️ Voltar"):
+            st.session_state.wizard_step = 1
+            st.rerun()
+        if col2.button("Próximo ➡️", type="primary"):
+            # Converte e salva
+            fixed_list = []
+            for _, row in edited_df.iterrows():
+                if row["Descrição"] and row["Valor"] > 0:
+                    fixed_list.append({
+                        "description": row["Descrição"],
+                        "amount": float(row["Valor"]),
+                        "due_day": int(row["Dia Vencimento"]) if pd.notnull(row["Dia Vencimento"]) else 1
+                    })
+            st.session_state.wizard_data['fixed_expenses'] = fixed_list
+            st.session_state.df_fixed = edited_df # Persiste estado visual
+            st.session_state.wizard_step = 3
+            st.rerun()
+
+    # --- PASSO 3: DÍVIDAS ---
+    elif step == 3:
+        st.subheader("3. Dívidas e Empréstimos")
+        st.caption("Liste parcelas de carro, empréstimos ou dívidas com terceiros.")
+        
+        if 'df_debts' not in st.session_state:
+            st.session_state.df_debts = pd.DataFrame(columns=["Descrição", "Valor Total", "Parcelas Restantes", "Valor Parcela"])
+
+        edited_debts = st.data_editor(
+            st.session_state.df_debts, 
+            num_rows="dynamic", 
+            use_container_width=True,
+            column_config={
+                "Valor Total": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Valor Parcela": st.column_config.NumberColumn(format="R$ %.2f"),
+                "Parcelas Restantes": st.column_config.NumberColumn(format="%d")
+            }
+        )
+        
+        col1, col2 = st.columns([1, 3])
+        if col1.button("⬅️ Voltar"):
+            st.session_state.wizard_step = 2
+            st.rerun()
+        if col2.button("Próximo ➡️", type="primary"):
+            debts_list = []
+            for _, row in edited_debts.iterrows():
+                if row["Descrição"]:
+                    debts_list.append({
+                        "description": row["Descrição"],
+                        "total_value": float(row["Valor Total"] or 0),
+                        "remaining_installments": int(row["Parcelas Restantes"] or 0),
+                        "installment_value": float(row["Valor Parcela"] or 0)
+                    })
+            st.session_state.wizard_data['debts'] = debts_list
+            st.session_state.df_debts = edited_debts
+            st.session_state.wizard_step = 4
+            st.rerun()
+
+    # --- PASSO 4: EXTRAS ---
+    elif step == 4:
+        st.subheader("4. Detalhes Finais")
+        with st.form("step4"):
+            credit_limit = st.number_input("Limite TOTAL do Cartão de Crédito", step=100.0, format="%.2f")
+            current_invoice = st.number_input("Valor da Fatura Atual", step=50.0, format="%.2f")
+            goals = st.text_area("Quais suas metas financeiras? (Ex: Comprar casa, Viajar)", height=100)
+            
+            if st.form_submit_button("Finalizar Configuração 🎉"):
+                st.session_state.wizard_data['credit_card'] = {
+                    'limit': credit_limit,
+                    'current_invoice': current_invoice
+                }
+                st.session_state.wizard_data['goals'] = goals
+                save_wizard_data(st.session_state.wizard_data)
+
+# --- DASHBOARD (CÓDIGO EXISTENTE REFATORADO) ---
+def main_dashboard():
     # Sidebar
     with st.sidebar:
         st.header("DoisPés 🦶")
@@ -139,62 +259,101 @@ else:
     with st.expander("💸 Novo Lançamento", expanded=True):
         col1, col2 = st.columns(2)
         tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"])
-        valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0)
+        valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f")
         
         col3, col4 = st.columns(2)
-        desc = col3.text_input("Descrição (Ex: Pizza, Luz)")
+        desc = col3.text_input("Descrição")
         cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"])
         
         if st.button("Salvar Lançamento", use_container_width=True):
-            add_transaction(tipo, valor, desc, datetime.now(), cat)
+            db.collection('transactions').add({
+                'family_id': st.session_state.family_id,
+                'user_name': st.session_state.email.split('@')[0],
+                'type': tipo,
+                'value': float(valor),
+                'description': desc,
+                'category': cat,
+                'date': datetime.combine(datetime.now(), datetime.min.time())
+            })
+            st.toast("Salvo!")
             st.rerun()
-            
+
     # --- 2. DADOS ---
-    df = get_data()
+    # Logica de busca de dados
+    docs = db.collection('transactions').where("family_id", "==", st.session_state.family_id).stream()
+    data = [doc.to_dict() for doc in docs]
     
-    if not df.empty:
-        # Filtro de Mês (Opcional, pega o atual por padrão ou todos)
-        df['mes'] = df['date'].dt.strftime('%Y-%m')
-        mes_atual = datetime.now().strftime('%Y-%m')
+    if data:
+        df = pd.DataFrame(data)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date', ascending=False)
         
-        # Resumo Financeiro
         rec = df[df['type']=='Receita']['value'].sum()
         desp = df[df['type']=='Despesa']['value'].sum()
         inv = df[df['type']=='Investimento']['value'].sum()
         saldo = rec - desp - inv
         
-        # Métricas
         st.markdown("---")
         c1, c2, c3 = st.columns(3)
-        c1.metric("Entradas", f"R$ {rec:,.2f}")
-        c2.metric("Saídas", f"R$ {desp:,.2f}", delta=-desp, delta_color="inverse")
-        c3.metric("Saldo", f"R$ {saldo:,.2f}", delta_color="normal" if saldo > 0 else "inverse")
-        st.caption(f"Investimentos Totais: R$ {inv:,.2f}")
-
-        # Botão Mágico da IA
+        c1.metric("Entradas", format_currency(rec))
+        c2.metric("Saídas", format_currency(desp), delta=format_currency(-desp), delta_color="inverse")
+        c3.metric("Saldo", format_currency(saldo), delta_color="normal" if saldo > 0 else "inverse")
+        
+        # Botão IA
         if st.button("✨ Pedir análise ao Consultor IA"):
-            info_ia = f"Receitas: {rec}, Despesas: {desp}, Investimentos: {inv}. Saldo: {saldo}. Gastos recentes: {df[['description','value']].head(5).to_dict()}"
-            with st.spinner("Analisando os números do casal..."):
-                insight = get_ai_analysis(info_ia)
-                st.info(insight)
-        
-        # Gráficos e Extrato
-        tab_g, tab_e = st.tabs(["Gráficos", "Extrato"])
-        
-        with tab_g:
-            if not df[df['type']=='Despesa'].empty:
-                fig = px.pie(df[df['type']=='Despesa'], values='value', names='category', title='Para onde foi o dinheiro?', hole=0.4)
-                st.plotly_chart(fig, use_container_width=True)
+            # Resgata profile do usuário para contexto extra
+            user_profile = db.collection('users').document(st.session_state.user_id).get().to_dict()
+            profile_txt = f"Renda: {user_profile.get('income', 0)}. Metas: {user_profile.get('goals', '')}"
             
-            # Quem gastou mais?
-            fig2 = px.bar(df, x='type', y='value', color='user_name', title="Quem movimentou o quê?", barmode='group')
-            st.plotly_chart(fig2, use_container_width=True)
+            info_ia = f"Perfil: {profile_txt}. Dados Reais (já em reais): Receitas: {rec}, Despesas: {desp}, Saldo: {saldo}."
+            
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            try:
+                with st.spinner("Analisando..."):
+                    response = model.generate_content(f"Analise financeiramente: {info_ia}")
+                    st.info(response.text)
+            except Exception as e:
+                st.error(f"Erro na IA: {e}")
 
-        with tab_e:
+        # Gráficos
+        tab1, tab2 = st.tabs(["Gráficos", "Extrato"])
+        with tab1:
+            if not df[df['type']=='Despesa'].empty:
+                st.plotly_chart(px.pie(df[df['type']=='Despesa'], values='value', names='category', hole=0.4), use_container_width=True)
+        with tab2:
             st.dataframe(
-                df[['date', 'description', 'value', 'type', 'user_name']].sort_values('date', ascending=False),
-                use_container_width=True,
-                hide_index=True
+                df[['date', 'description', 'value', 'type']], 
+                use_container_width=True, 
+                hide_index=True,
+                column_config={
+                    "date": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                    "description": "Descrição",
+                    "value": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                    "type": "Tipo"
+                }
             )
-    else:
-        st.info("Nenhum dado encontrado. Faça o primeiro lançamento do DoisPés!")
+
+# --- CONTROLLER PRINCIPAL ---
+
+if 'user_id' not in st.session_state:
+    # TELA DE LOGIN
+    st.title("🦶🦶 DoisPés")
+    tab1, tab2 = st.tabs(["Entrar", "Nova Conta"])
+    with tab1:
+        email = st.text_input("Email")
+        if st.button("Entrar"):
+            login_user(email)
+    with tab2:
+        n_email = st.text_input("Novo Email")
+        n_pass = st.text_input("Nova Senha", type="password")
+        code = st.text_input("Código da Família")
+        if st.button("Cadastrar"):
+            register_user(n_email, n_pass, code)
+
+elif not st.session_state.get('setup_completed', False):
+    # TELA DE WIZARD
+    wizard_flow()
+
+else:
+    # TELA PRINCIPAL
+    main_dashboard()
