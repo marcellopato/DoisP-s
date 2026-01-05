@@ -3,3 +3,4 @@ pandas
 plotly
 firebase-admin
 google-generativeai
+

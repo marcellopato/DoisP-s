@@ -30,7 +30,16 @@ except Exception:
     st.info("No Streamlit Cloud, vá em Settings > Secrets e adicione suas chaves.")
     st.stop()
 
+
 # --- FUNÇÕES AUXILIARES ---
+
+
+
+
+
+
+
+
 
 def format_currency(value):
     """Formata valor float para moeda BRL (R$ 1.000,00)"""
@@ -64,8 +73,8 @@ def login_user(email):
             st.rerun()
         else:
             st.error("Usuário sem registro no banco.")
-    except:
-        st.error("Email não encontrado ou erro no login.")
+    except Exception as e:
+        st.error(f"Erro no login: {e}")
 
 def save_wizard_data(data):
     uid = st.session_state.user_id
@@ -249,21 +258,90 @@ def main_dashboard():
         st.header("DoisPés 🦶")
         st.write(f"Usuário: **{st.session_state.email}**")
         st.info(f"Família: {st.session_state.family_id}")
+        
+
+
+        st.divider()
         if st.button("Sair"):
             st.session_state.clear()
             st.rerun()
 
+    # --- ÁREA PRINCIPAL ---
     st.title(f"Olá, {st.session_state.email.split('@')[0]}!")
     
+
+
+    # --- 1. ADICIONAR ---
     # --- 1. ADICIONAR ---
     with st.expander("💸 Novo Lançamento", expanded=True):
+        # AI Upload Section
+        uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"])
+        
+        # Initialize form state if not present
+        if 'new_Launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
+        if 'new_launch_desc' not in st.session_state: st.session_state.new_launch_desc = ""
+        if 'new_launch_cat' not in st.session_state: st.session_state.new_launch_cat = "Outros"
+        if 'new_launch_type' not in st.session_state: st.session_state.new_launch_type = "Despesa"
+
+        if uploaded_file:
+            # Check if this file was already analyzed to avoid re-running on every interaction
+            if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != uploaded_file.name:
+                with st.spinner("🤖 A IA está lendo seu comprovante..."):
+                    try:
+                        import PIL.Image
+                        
+                        if uploaded_file.type == "application/pdf":
+                            st.warning("⚠️ Suporte a PDF em breve! Por favor use imagem (JPG/PNG).")
+                        else:
+                            img = PIL.Image.open(uploaded_file)
+                            st.image(img, caption='Comprovante', width=200)
+                            
+                            # Gemini Call
+                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            prompt = """
+                            Analise esta imagem de comprovante/recibo financeiro e extraia um JSON:
+                            {
+                                "value": float (valor total, use ponto para decimais),
+                                "description": string (nome do estabelecimento ou resumo curto),
+                                "category": string (escolha uma: Casa, Mercado, Lazer, Transporte, Salário, Investimento, Outros),
+                                "type": string (escolha uma: Despesa, Receita, Investimento),
+                                "date": string (formato YYYY-MM-DD)
+                            }
+                            Se não encontrar algo, deixe null. Responda APENAS o JSON.
+                            """
+                            response = model.generate_content([prompt, img])
+                            
+                            # Clean json
+                            text = response.text.replace("```json", "").replace("```", "").strip()
+                            data_ai = json.loads(text)
+                            
+                            if data_ai:
+                                st.session_state.new_launch_val = float(data_ai.get('value', 0.0) or 0.0)
+                                st.session_state.new_launch_desc = data_ai.get('description', "") or ""
+                                
+                                category = data_ai.get('category')
+                                if category in ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"]:
+                                    st.session_state.new_launch_cat = category
+                                
+                                type_ = data_ai.get('type')
+                                if type_ in ["Despesa", "Receita", "Investimento"]:
+                                    st.session_state.new_launch_type = type_
+                                
+                                st.session_state.last_analyzed_file = uploaded_file.name
+                                st.success("✅ Dados extraídos!")
+
+                    except Exception as e:
+                        st.error(f"Erro na leitura da IA: {e}")
+
         col1, col2 = st.columns(2)
-        tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"])
-        valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f")
+        
+        # Widgets linked to session_state keys
+        tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"], key="new_launch_type")
+        valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f", key="new_launch_val")
         
         col3, col4 = st.columns(2)
-        desc = col3.text_input("Descrição")
-        cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"])
+        desc = col3.text_input("Descrição", key="new_launch_desc")
+        cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"], key="new_launch_cat")
         
         if st.button("Salvar Lançamento", use_container_width=True):
             db.collection('transactions').add({
@@ -275,6 +353,13 @@ def main_dashboard():
                 'category': cat,
                 'date': datetime.combine(datetime.now(), datetime.min.time())
             })
+            
+            # Reset form
+            st.session_state.new_launch_val = 0.0
+            st.session_state.new_launch_desc = ""
+            if 'last_analyzed_file' in st.session_state:
+                del st.session_state.last_analyzed_file
+            
             st.toast("Salvo!")
             st.rerun()
 
