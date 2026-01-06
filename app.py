@@ -275,17 +275,21 @@ def main_dashboard():
     # --- 1. ADICIONAR ---
     with st.expander("💸 Novo Lançamento", expanded=True):
         # AI Upload Section
-        uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"])
+        if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
+        uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"], key=f"uploader_{st.session_state.uploader_key}")
         
         # Initialize form state if not present
-        if 'new_Launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
+        if 'new_launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
         if 'new_launch_desc' not in st.session_state: st.session_state.new_launch_desc = ""
         if 'new_launch_cat' not in st.session_state: st.session_state.new_launch_cat = "Outros"
         if 'new_launch_type' not in st.session_state: st.session_state.new_launch_type = "Despesa"
 
         if uploaded_file:
             # Check if this file was already analyzed to avoid re-running on every interaction
-            if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != uploaded_file.name:
+            # We use the key to track uniqueness combined with filename
+            current_file_id = f"{st.session_state.uploader_key}_{uploaded_file.name}"
+            
+            if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != current_file_id:
                 with st.spinner("🤖 A IA está lendo seu comprovante..."):
                     try:
                         import PIL.Image
@@ -297,7 +301,7 @@ def main_dashboard():
                             st.image(img, caption='Comprovante', width=200)
                             
                             # Gemini Call
-                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            model = genai.GenerativeModel('gemini-2.0-flash')
                             prompt = """
                             Analise esta imagem de comprovante/recibo financeiro e extraia um JSON:
                             {
@@ -327,8 +331,9 @@ def main_dashboard():
                                 if type_ in ["Despesa", "Receita", "Investimento"]:
                                     st.session_state.new_launch_type = type_
                                 
-                                st.session_state.last_analyzed_file = uploaded_file.name
-                                st.success("✅ Dados extraídos!")
+                                st.session_state.last_analyzed_file = current_file_id
+                                st.success("✅ Dados extraídos! Confira abaixo.")
+                                st.rerun() # Rerun to update widgets with new session state values
 
                     except Exception as e:
                         st.error(f"Erro na leitura da IA: {e}")
@@ -343,25 +348,29 @@ def main_dashboard():
         desc = col3.text_input("Descrição", key="new_launch_desc")
         cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"], key="new_launch_cat")
         
-        if st.button("Salvar Lançamento", use_container_width=True):
+        def save_transaction():
             db.collection('transactions').add({
                 'family_id': st.session_state.family_id,
                 'user_name': st.session_state.email.split('@')[0],
-                'type': tipo,
-                'value': float(valor),
-                'description': desc,
-                'category': cat,
+                'type': st.session_state.new_launch_type,
+                'value': float(st.session_state.new_launch_val),
+                'description': st.session_state.new_launch_desc,
+                'category': st.session_state.new_launch_cat,
                 'date': datetime.combine(datetime.now(), datetime.min.time())
             })
             
-            # Reset form
+            # Reset form safely in callback
             st.session_state.new_launch_val = 0.0
             st.session_state.new_launch_desc = ""
             if 'last_analyzed_file' in st.session_state:
                 del st.session_state.last_analyzed_file
             
+            # Increment uploader key to wipe the file uploader widget
+            st.session_state.uploader_key += 1
+            
             st.toast("Salvo!")
-            st.rerun()
+
+        st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
 
     # --- 2. DADOS ---
     # Logica de busca de dados
@@ -392,7 +401,7 @@ def main_dashboard():
             
             info_ia = f"Perfil: {profile_txt}. Dados Reais (já em reais): Receitas: {rec}, Despesas: {desp}, Saldo: {saldo}."
             
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             try:
                 with st.spinner("Analisando..."):
                     response = model.generate_content(f"Analise financeiramente: {info_ia}")
