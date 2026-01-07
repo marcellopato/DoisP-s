@@ -6,6 +6,8 @@ from firebase_admin import credentials, firestore, auth
 from datetime import datetime
 import google.generativeai as genai
 import json
+import re
+import requests
 
 # --- CONFIGURAÇÃO DA MARCA DOIS PÉS ---
 st.set_page_config(page_title="DoisPés", layout="centered", page_icon="🦶")
@@ -45,36 +47,145 @@ def format_currency(value):
     """Formata valor float para moeda BRL (R$ 1.000,00)"""
     return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+def validate_password(password):
+    """Valida força da senha: mínimo 8 caracteres, letras e números"""
+    if len(password) < 8:
+        return False, "Senha deve ter no mínimo 8 caracteres"
+    if not re.search(r"[a-zA-Z]", password):
+        return False, "Senha deve conter letras"
+    if not re.search(r"[0-9]", password):
+        return False, "Senha deve conter números"
+    return True, "Senha válida"
+
 def register_user(email, password, family_code):
+    """Registra novo usuário com validação de senha"""
+    # Validar senha
+    is_valid, message = validate_password(password)
+    if not is_valid:
+        st.error(f"❌ {message}")
+        return
+    
+    # Validar family_code
+    if not family_code or len(family_code.strip()) < 3:
+        st.error("❌ Código da família deve ter no mínimo 3 caracteres")
+        return
+    
     try:
+        # Criar usuário no Firebase Auth
         user = auth.create_user(email=email, password=password)
-        # Cria profile inicial
+        
+        # Criar profile inicial no Firestore
         db.collection('users').document(user.uid).set({
             'email': email,
             'family_id': family_code.upper().strip(),
-            'setup_completed': False  # Flag para ativar o Wizard
+            'setup_completed': False,
+            'created_at': datetime.now()
         })
+        
         st.success("✅ Conta criada! Faça login para continuar.")
     except Exception as e:
-        st.error(f"Erro ao criar conta: {e}")
+        error_msg = str(e)
+        if "EMAIL_EXISTS" in error_msg or "already exists" in error_msg:
+            st.error("❌ Este email já está cadastrado")
+        else:
+            st.error(f"❌ Erro ao criar conta: {error_msg}")
 
-def login_user(email):
-    # ATENÇÃO: Autenticação simplificada para protótipo. 
+def login_user(email, password):
+    """Login seguro com verificação de senha via Firebase REST API"""
     try:
-        user = auth.get_user_by_email(email)
-        doc = db.collection('users').document(user.uid).get()
+        # Firebase REST API para verificar credenciais
+        # Nota: Firebase Admin SDK não verifica senha, precisamos usar REST API
+        api_key = st.secrets.get("FIREBASE_API_KEY")
+        
+        if not api_key:
+            st.error("⚠️ Configuração incompleta. Configure FIREBASE_API_KEY em secrets.toml")
+            return
+        
+        # Autenticar via Firebase REST API
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+        payload = {
+            "email": email,
+            "password": password,
+            "returnSecureToken": True
+        }
+        
+        response = requests.post(url, json=payload)
+        
+        if response.status_code != 200:
+            error_data = response.json()
+            error_msg = error_data.get('error', {}).get('message', '')
+            
+            if "INVALID_PASSWORD" in error_msg or "INVALID_LOGIN_CREDENTIALS" in error_msg:
+                st.error("❌ Email ou senha incorretos")
+            elif "USER_DISABLED" in error_msg:
+                st.error("❌ Conta desabilitada")
+            elif "TOO_MANY_ATTEMPTS" in error_msg:
+                st.error("❌ Muitas tentativas. Aguarde alguns minutos.")
+            else:
+                st.error(f"❌ Erro no login: {error_msg}")
+            return
+        
+        # Login bem-sucedido, buscar dados do usuário
+        auth_data = response.json()
+        user_id = auth_data['localId']
+        
+        # Buscar profile do Firestore
+        doc = db.collection('users').document(user_id).get()
         
         if doc.exists:
             data = doc.to_dict()
-            st.session_state.user_id = user.uid
-            st.session_state.email = user.email
+            
+            # Validar que o usuário pertence a uma família
+            if not data.get('family_id'):
+                st.error("❌ Usuário sem código da família. Entre em contato com o suporte.")
+                return
+            
+            # Salvar sessão
+            st.session_state.user_id = user_id
+            st.session_state.email = email
             st.session_state.family_id = data.get('family_id')
+            st.session_state.user_name = data.get('display_name', email.split('@')[0])
             st.session_state.setup_completed = data.get('setup_completed', False)
+            st.session_state.auth_token = auth_data.get('idToken')  # Para uso futuro
+            
             st.rerun()
         else:
-            st.error("Usuário sem registro no banco.")
+            st.error("❌ Usuário não encontrado no banco de dados")
+            
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Erro de conexão: {e}")
     except Exception as e:
-        st.error(f"Erro no login: {e}")
+        st.error(f"❌ Erro inesperado: {e}")
+
+def reset_password(email):
+    """Envia email de recuperação de senha"""
+    try:
+        api_key = st.secrets.get("FIREBASE_API_KEY")
+        
+        if not api_key:
+            st.error("⚠️ Configuração incompleta")
+            return
+        
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}"
+        payload = {
+            "requestType": "PASSWORD_RESET",
+            "email": email
+        }
+        
+        response = requests.post(url, json=payload)
+        
+        if response.status_code == 200:
+            st.success("✅ Email de recuperação enviado! Verifique sua caixa de entrada.")
+        else:
+            error_data = response.json()
+            error_msg = error_data.get('error', {}).get('message', '')
+            
+            if "EMAIL_NOT_FOUND" in error_msg:
+                st.error("❌ Email não cadastrado")
+            else:
+                st.error(f"❌ Erro: {error_msg}")
+    except Exception as e:
+        st.error(f"❌ Erro ao enviar email: {e}")
 
 def save_wizard_data(data):
     uid = st.session_state.user_id
@@ -432,17 +543,58 @@ def main_dashboard():
 if 'user_id' not in st.session_state:
     # TELA DE LOGIN
     st.title("🦶🦶 DoisPés")
-    tab1, tab2 = st.tabs(["Entrar", "Nova Conta"])
+    st.caption("Finanças a dois, futuro de milhões.")
+    
+    tab1, tab2, tab3 = st.tabs(["Entrar", "Nova Conta", "Esqueci a Senha"])
+    
     with tab1:
-        email = st.text_input("Email")
-        if st.button("Entrar"):
-            login_user(email)
+        st.subheader("Login")
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Senha", type="password", key="login_password")
+        
+        col1, col2 = st.columns([3, 1])
+        if col1.button("Entrar", type="primary", use_container_width=True):
+            if email and password:
+                login_user(email, password)
+            else:
+                st.error("❌ Preencha email e senha")
+        
+        if col2.button("👁️", help="Ver/ocultar senha"):
+            st.info("💡 Dica: use a aba 'Esqueci a Senha' para recuperar acesso")
+    
     with tab2:
-        n_email = st.text_input("Novo Email")
-        n_pass = st.text_input("Nova Senha", type="password")
-        code = st.text_input("Código da Família")
-        if st.button("Cadastrar"):
-            register_user(n_email, n_pass, code)
+        st.subheader("Criar Conta")
+        n_email = st.text_input("Email", key="register_email")
+        n_pass = st.text_input("Nova Senha", type="password", key="register_password")
+        
+        # Indicador visual de força da senha
+        if n_pass:
+            is_valid, msg = validate_password(n_pass)
+            if is_valid:
+                st.success(f"✅ {msg}")
+            else:
+                st.warning(f"⚠️ {msg}")
+        
+        st.caption("📋 Requisitos: mínimo 8 caracteres, letras e números")
+        
+        code = st.text_input("Código da Família", help="Escolha um código único para compartilhar com seu parceiro(a)")
+        
+        if st.button("Cadastrar", type="primary", use_container_width=True):
+            if n_email and n_pass and code:
+                register_user(n_email, n_pass, code)
+            else:
+                st.error("❌ Preencha todos os campos")
+    
+    with tab3:
+        st.subheader("Recuperar Senha")
+        st.info("📧 Enviaremos um link de recuperação para seu email")
+        reset_email = st.text_input("Email cadastrado", key="reset_email")
+        
+        if st.button("Enviar Link de Recuperação", type="primary", use_container_width=True):
+            if reset_email:
+                reset_password(reset_email)
+            else:
+                st.error("❌ Digite seu email")
 
 elif not st.session_state.get('setup_completed', False):
     # TELA DE WIZARD
