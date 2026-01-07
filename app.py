@@ -187,6 +187,44 @@ def reset_password(email):
     except Exception as e:
         st.error(f"❌ Erro ao enviar email: {e}")
 
+# --- AUTORIZAÇÃO E SEGURANÇA ---
+
+def require_auth():
+    """Middleware: garante que usuário está autenticado"""
+    if 'user_id' not in st.session_state:
+        st.error("🔒 Sessão expirada. Faça login novamente.")
+        st.stop()
+    return True
+
+def check_family_access(family_id):
+    """Valida se o usuário tem acesso à família especificada"""
+    require_auth()
+    
+    user_family = st.session_state.get('family_id')
+    if not user_family:
+        st.error("❌ Usuário sem família associada")
+        st.stop()
+        return False
+    
+    if user_family != family_id:
+        st.error("🚫 Acesso negado: você não pertence a esta família")
+        st.stop()
+        return False
+    
+    return True
+
+def get_user_family_id():
+    """Retorna family_id do usuário autenticado com validação"""
+    require_auth()
+    family_id = st.session_state.get('family_id')
+    
+    if not family_id:
+        st.error("❌ Código da família não encontrado. Entre em contato com o suporte.")
+        st.stop()
+    
+    return family_id
+
+
 def save_wizard_data(data):
     uid = st.session_state.user_id
     batch = db.batch()
@@ -484,8 +522,11 @@ def main_dashboard():
         st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
 
     # --- 2. DADOS ---
+    # Buscar family_id com validação de autorização
+    family_id = get_user_family_id()
+    
     # Logica de busca de dados
-    docs = db.collection('transactions').where("family_id", "==", st.session_state.family_id).stream()
+    docs = db.collection('transactions').where("family_id", "==", family_id).stream()
     data = [doc.to_dict() for doc in docs]
     
     if data:
