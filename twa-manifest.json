@@ -18,6 +18,10 @@
 	"shortcuts": [],
 	"generatorApp": "bubblewrap-cli",
 	"webManifestUrl": "https://doispes.streamlit.app/manifest.json",
+	"signingKey": {
+		"path": "./android.keystore",
+		"alias": "android"
+	},
 	"fallbackType": "customtabs",
 	"features": {
 		"playBilling": {

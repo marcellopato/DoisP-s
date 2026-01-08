@@ -35,8 +35,12 @@ jobs:
 
     - name: Build APK (Non-Interactive)
       run: |
+        # Generate Debug Keystore
+        keytool -genkeypair -v -keystore android.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias android -dname "CN=DoisPes, OU=Finance, O=DoisPes, L=Unknown, S=Unknown, C=US" -storepass password -keypass password
+        
         mkdir android-project
         cp twa-manifest.json android-project/twa-manifest.json
+        cp android.keystore android-project/android.keystore
         cd android-project
         bubblewrap build --manifest twa-manifest.json --skipKeytool
 
