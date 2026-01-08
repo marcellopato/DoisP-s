@@ -89,3 +89,15 @@ O aplicativo Android (TWA) é apenas uma **janela nativa** que abre o seu site.
 ### "Posso usar no iPhone (iOS)?"
 O TWA é uma tecnologia Android. Para iOS, a Apple não aceita esse tipo de "wrap" fácil na App Store.
 No iPhone, o caminho é usar o **"Adicionar à Tela Principal"** (PWA), que já configuramos. Funciona praticamente igual, só não está na loja.
+
+### "Posso distribuir sem a Play Store?" (GitHub Releases)
+
+**SIM!** É uma ótima estratégia inicial.
+
+1. Gere o arquivo `.apk` usando o Bubblewrap.
+2. Vá no **GitHub > Releases > Draft a new release**.
+3. Crie a versão (ex: `v0.1.0`).
+4. **Arraste o arquivo .apk** para a área de anexos.
+5. Publique.
+
+Qualquer pessoa com o link pode baixar o `.apk` e instalar (o Android vai avisar que é de "fonte desconhecida", basta autorizar). É perfeito para testes com família e amigos antes de pagar os $25 da Google.
