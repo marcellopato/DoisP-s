@@ -42,7 +42,7 @@ jobs:
         cp twa-manifest.json android-project/twa-manifest.json
         cp android.keystore android-project/android.keystore
         cd android-project
-        bubblewrap build --manifest twa-manifest.json --skipKeytool
+        yes | bubblewrap build --manifest twa-manifest.json --skipKeytool
 
     - name: Upload APK to Release
       uses: softprops/action-gh-release@v1
