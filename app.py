@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from datetime import datetime
@@ -1061,72 +1062,116 @@ def render_dashboard_home():
     
     family_id = get_user_family_id()
     
-    # 1. Fetch ALL Data needed for dashboard 2.0
-    # Transactions
+    # --- 2. DATA PROCESSING ---
+    # Family Income (Sum of all members)
+    # We need to find all users with the same family_id
+    # Note: Using a simple query since we don't have a direct 'users' index by family_id yet, 
+    # but strictly speaking we should query WHERE family_id == ...
+    # For now, let's assume we can query users. If index missing, might default to current user, 
+    # but let's try to do it right.
+    try:
+        family_users = db.collection('users').where('family_id', '==', family_id).stream()
+        family_income = sum([float(u.to_dict().get('income', 0.0)) for u in family_users])
+    except:
+        # Fallback if index issue
+        user_doc = db.collection('users').document(st.session_state.user_id).get()
+        family_income = float(user_doc.to_dict().get('income', 0.0)) if user_doc.exists else 0.0
+    
+    # Transactions (Restore deleted block)
     docs_trans = db.collection('transactions').where("family_id", "==", family_id).stream()
     trans_data = [doc.to_dict() for doc in docs_trans]
     df_trans = pd.DataFrame(trans_data)
     
-    # Debts
+    # Debts (Installments vs Total)
     docs_debts = db.collection('debts').where("family_id", "==", family_id).stream()
     debts_data = [doc.to_dict() for doc in docs_debts]
-    total_debts = sum(d['total_value'] for d in debts_data)
+    total_debts_liability = sum(d['total_value'] for d in debts_data)
+    total_debt_monthly = sum(d.get('installment_value', 0) for d in debts_data)
     
-    # Recurring
+    # Recurring (Monthly Fixed)
     docs_rec = db.collection('recurring_expenses').where("family_id", "==", family_id).stream()
     rec_data = [doc.to_dict() for doc in docs_rec]
     total_rec_monthly = sum(r['amount'] for r in rec_data)
     
-    # Calculate Balance
-    rec_val = 0.0
-    desp_val = 0.0
+    # Transactions (Variable Spend this month)
+    current_month = datetime.now().month
+    current_year = datetime.now().year
+    
+    rec_val = 0.0 # Receitas extras
+    desp_variable_val = 0.0 # Gastos variáveis
+    
     if not df_trans.empty:
         df_trans['date'] = pd.to_datetime(df_trans['date'])
-        df_trans = df_trans.sort_values('date', ascending=False)
-        rec_val = df_trans[df_trans['type']=='Receita']['value'].sum()
-        desp_val = df_trans[df_trans['type']=='Despesa']['value'].sum()
-        inv_val = df_trans[df_trans['type']=='Investimento']['value'].sum()
-        saldo = rec_val - desp_val - inv_val
-    else:
-        saldo = 0.0
-
-    # --- 2. AI MORNING BRIEFING ---
-    briefing = get_daily_briefing(family_id, st.session_state.email.split('@')[0], rec_data, total_debts, saldo)
+        # Filter current month for "Variable Spend" calculation
+        df_month = df_trans[(df_trans['date'].dt.month == current_month) & (df_trans['date'].dt.year == current_year)]
+        
+        rec_val = df_month[df_month['type']=='Receita']['value'].sum()
+        desp_variable_val = df_month[df_month['type']=='Despesa']['value'].sum()
+        
+        # Calculate Current Actual Balance (All time or synced bank balance)
+        # For this view, let's look at "Projected Month Result"
+        
+    # --- CALCULO DA VISÃO CONJUNTA (DRE) ---
+    total_obligations = total_rec_monthly + total_debt_monthly
+    total_spent = total_obligations + desp_variable_val
+    total_income = family_income + rec_val
+    remaining = total_income - total_spent
+    
+    # --- AI MORNING BRIEFING ---
+    briefing = get_daily_briefing(family_id, display_name, rec_data, total_debts_liability, remaining)
     st.info(briefing, icon="🌅")
 
-    # --- 3. METRICS ROW (CUSTOM CARDS) ---
-    def card(label, value, color, help_text=""):
+    # --- 3. DASHBOARD UNIFICADO (VISÃO GERAL) ---
+    st.markdown("### 🔭 Visão Mensal Unificada (Família)")
+    
+    # Waterfall Chart Data
+    fig_waterfall = go.Figure(go.Waterfall(
+        name = "20", orientation = "v",
+        measure = ["relative", "relative", "relative", "relative", "total"],
+        x = ["Renda Familiar", "Contas Fixas", "Parcelas Dívidas", "Gastos Variáveis", "SOBRA PREVISTA"],
+        textposition = "outside",
+        text = [f"R$ {val:.0f}" for val in [total_income, -total_rec_monthly, -total_debt_monthly, -desp_variable_val, remaining]],
+        y = [total_income, -total_rec_monthly, -total_debt_monthly, -desp_variable_val, remaining],
+        connector = {"line":{"color":"rgb(63, 63, 63)"}},
+        decreasing = {"marker":{"color":"#e74c3c"}},
+        increasing = {"marker":{"color":"#2ecc71"}},
+        totals = {"marker":{"color":"#3498db"}}
+    ))
+    fig_waterfall.update_layout(
+        title="Fluxo de Caixa do Mês (DRE Pessoal)",
+        showlegend = False,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white")
+    )
+    st.plotly_chart(fig_waterfall, use_container_width=True)
+
+    # --- 4. DETAILED CARDS ---
+    def card(label, value, color, sub="", big=True):
+        f_size = "24px" if big else "18px"
         st.markdown(
             f"""
-            <div style="background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid {color}; margin-bottom: 10px;">
+            <div style="background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid {color}; height: 100%;">
                 <p style="color: #AAAAAA; font-size: 12px; margin-bottom: 5px;">{label}</p>
-                <p style="color: {color}; font-size: 22px; font-weight: bold; margin: 0;">{value}</p>
-                <p style="color: #666666; font-size: 10px; margin-top: 5px;">{help_text}</p>
+                <p style="color: {color}; font-size: {f_size}; font-weight: bold; margin: 0;">{value}</p>
+                <p style="color: #666666; font-size: 11px; margin-top: 5px;">{sub}</p>
             </div>
-            """, 
-            unsafe_allow_html=True
-        )
+            """, unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
-    
-    with c1:
-        color = "#3498db" if saldo >= 0 else "#e74c3c" # Blue if positive, Red if negative
-        card("Saldo Atual", format_currency(saldo), color, "Disponível em conta")
-        
-    with c2:
-        card("Saídas (Mês)", format_currency(desp_val), "#e74c3c", "Total de despesas do mês") # Red
-        
+    with c1: 
+        card("Renda Total", format_currency(total_income), "#2ecc71", "Salário + Extras")
+    with c2: 
+        card("Comprometido (Fixo+Dívidas)", format_currency(total_obligations), "#f39c12", f"Fixas: {format_currency(total_rec_monthly)} | Dívidas: {format_currency(total_debt_monthly)}")
     with c3:
-        # Dívidas são "apertos" -> Laranja/Amarelo forte
-        card("Dívidas Totais", format_currency(total_debts), "#f39c12", "Longo prazo (bancos, etc)")
-        
+        card("Gasto no Cartão/Pix hoje", format_currency(desp_variable_val), "#e74c3c", "Despesas Variáveis do Mês")
     with c4:
-        # Custo fixo -> Laranja
-        card("Custo Fixo/Mês", format_currency(total_rec_monthly), "#d35400", "Contas recorrentes")
+        color_res = "#3498db" if remaining > 0 else "#c0392b"
+        card("Resultado Previsto", format_currency(remaining), color_res, "O que deve sobrar (ou faltar)")
     
     st.markdown("---")
     
-    # --- 4. CHARTS & UPCOMING ---
+    # --- 5. CHARTS & LISTS ---
     col_l, col_r = st.columns([2, 1])
     
     with col_l:
