@@ -1,0 +1,17 @@
+{
+	"name": "DoisPés",
+	"short_name": "DoisPés",
+	"theme_color": "#0E1117",
+	"background_color": "#0E1117",
+	"display": "standalone",
+	"orientation": "portrait",
+	"scope": "/",
+	"start_url": "/",
+	"icons": [
+		{
+			"src": "app_icon.png",
+			"sizes": "512x512",
+			"type": "image/png"
+		}
+	]
+}

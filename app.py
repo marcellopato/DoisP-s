@@ -14,6 +14,14 @@ import utils.importers as importers
 # --- CONFIGURAÇÃO DA MARCA DOIS PÉS ---
 st.set_page_config(page_title="DoisPés", page_icon="dois-pes.png", layout="wide")
 
+# --- MOBILE PWA CONFIG ---
+st.markdown("""
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0E1117">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+""", unsafe_allow_html=True)
+
 # --- CONEXÃO SEGURA COM A NUVEM (SEGREDOS) ---
 try:
     if "FIREBASE_KEY" in st.secrets and "GEMINI_KEY" in st.secrets:
