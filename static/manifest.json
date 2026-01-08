@@ -9,7 +9,7 @@
 	"start_url": "https://doispes.streamlit.app/",
 	"icons": [
 		{
-			"src": "https://doispes.streamlit.app/static/app_icon.png",
+			"src": "app_icon.png",
 			"sizes": "512x512",
 			"type": "image/png"
 		}
