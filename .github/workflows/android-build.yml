@@ -57,9 +57,12 @@ jobs:
         cp twa-manifest.json android-project/twa-manifest.json
         cp android.keystore android-project/android.keystore
         
-        # Build (No 'yes' needed as SDK is pre-configured)
+        # Debug environment
+        bubblewrap doctor
+        
+        # Build (Force 'yes' to handle any remaining prompts/licenses)
         cd android-project
-        bubblewrap build --skipKeytool
+        yes | bubblewrap build --skipKeytool
 
     - name: Upload APK to Release
       uses: softprops/action-gh-release@v1
