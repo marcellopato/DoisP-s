@@ -4,3 +4,4 @@ plotly
 firebase-admin
 google-generativeai
 requests
+streamlit-option-menu
