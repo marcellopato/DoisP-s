@@ -39,8 +39,9 @@ jobs:
         keytool -genkeypair -v -keystore android.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias android -dname "CN=DoisPes, OU=Finance, O=DoisPes, L=Unknown, S=Unknown, C=US" -storepass password -keypass password
         
         mkdir android-project
-        # Init project structure from LIVE Web Manifest
-        yes | bubblewrap init --manifest https://doispes.streamlit.app/manifest.json --directory android-project
+        # Init project structure from LOCAL manifest
+        # We must provide --chromeUrl because local file doesn't have domain context
+        yes | bubblewrap init --manifest ./static/manifest.json --directory android-project --chromeUrl https://doispes.streamlit.app
         
         # Overwrite with our custom TWA manifest (with signing keys)
         cp twa-manifest.json android-project/twa-manifest.json
