@@ -35,6 +35,12 @@ jobs:
 
     - name: Build APK (Non-Interactive)
       run: |
+        # Configure Bubblewrap to use System SDK (Avoids download hang)
+        mkdir -p ~/.bubblewrap
+        cp .bubblewrap/config.json ~/.bubblewrap/config.json
+        sed -i "s|JAVA_HOME_placeholder|$JAVA_HOME|g" ~/.bubblewrap/config.json
+        sed -i "s|ANDROID_HOME_placeholder|$ANDROID_HOME|g" ~/.bubblewrap/config.json
+        
         # Generate Debug Keystore
         keytool -genkeypair -v -keystore android.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias android -dname "CN=DoisPes, OU=Finance, O=DoisPes, L=Unknown, S=Unknown, C=US" -storepass password -keypass password
         
@@ -51,9 +57,9 @@ jobs:
         cp twa-manifest.json android-project/twa-manifest.json
         cp android.keystore android-project/android.keystore
         
-        # Build
+        # Build (No 'yes' needed as SDK is pre-configured)
         cd android-project
-        yes | bubblewrap build --skipKeytool
+        bubblewrap build --skipKeytool
 
     - name: Upload APK to Release
       uses: softprops/action-gh-release@v1
