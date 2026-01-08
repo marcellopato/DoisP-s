@@ -1,0 +1,42 @@
+{
+	"packageId": "com.doispes.twa",
+	"host": "doispes.streamlit.app",
+	"name": "DoisPés",
+	"launcherName": "DoisPés",
+	"themeColor": "#0E1117",
+	"navigationColor": "#0E1117",
+	"backgroundColor": "#0E1117",
+	"enableNotifications": true,
+	"startUrl": "/",
+	"iconUrl": "https://doispes.streamlit.app/app_icon.png",
+	"maskableIconUrl": "https://doispes.streamlit.app/app_icon.png",
+	"splashScreenUrl": "https://doispes.streamlit.app/splash_screen.png",
+	"display": "standalone",
+	"orientation": "portrait",
+	"appVersion": "1.0.0",
+	"appVersionCode": 1,
+	"shortcuts": [],
+	"generatorApp": "bubblewrap-cli",
+	"webManifestUrl": "https://doispes.streamlit.app/manifest.json",
+	"fallbackType": "customtabs",
+	"features": {
+		"playBilling": {
+			"enabled": false
+		},
+		"locationDelegation": {
+			"enabled": false
+		},
+		"playCore": {
+			"enabled": false
+		}
+	},
+	"alphaDependencies": {
+		"enabled": false
+	},
+	"enableSiteSettingsShortcut": true,
+	"isChromeOSOnly": false,
+	"isMetaQuest": false,
+	"fullScreen": false,
+	"minSdkVersion": 21,
+	"targetSdkVersion": 33
+}

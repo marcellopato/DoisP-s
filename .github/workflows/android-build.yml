@@ -1,0 +1,42 @@
+name: Build Android TWA
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Set up Google Chrome (for TWA)
+      uses: browser-actions/setup-chrome@latest
+
+    - name: Use Node.js 18
+      uses: actions/setup-node@v3
+      with:
+        node-version: 18
+
+    - name: Install Bubblewrap
+      run: npm install -g @bubblewrap/cli
+
+    - name: Build APK (Non-Interactive)
+      run: |
+        mkdir android-project
+        cp twa-manifest.json android-project/twa-manifest.json
+        cd android-project
+        bubblewrap build --manifest twa-manifest.json --skipKeytool
+
+    - name: Upload APK to Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: android-project/*.apk
