@@ -39,10 +39,15 @@ jobs:
         keytool -genkeypair -v -keystore android.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias android -dname "CN=DoisPes, OU=Finance, O=DoisPes, L=Unknown, S=Unknown, C=US" -storepass password -keypass password
         
         mkdir android-project
-        cp twa-manifest.json android-project/twa-manifest.json
+        # Init project structure from manifest
+        yes | bubblewrap init --manifest twa-manifest.json --directory android-project
+        
+        # Move keystore to project
         cp android.keystore android-project/android.keystore
+        
+        # Build
         cd android-project
-        yes | bubblewrap build --manifest twa-manifest.json --skipKeytool
+        yes | bubblewrap build --skipKeytool
 
     - name: Upload APK to Release
       uses: softprops/action-gh-release@v1
