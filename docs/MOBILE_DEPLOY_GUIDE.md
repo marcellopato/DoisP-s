@@ -101,3 +101,13 @@ No iPhone, o caminho é usar o **"Adicionar à Tela Principal"** (PWA), que já 
 5. Publique.
 
 Qualquer pessoa com o link pode baixar o `.apk` e instalar (o Android vai avisar que é de "fonte desconhecida", basta autorizar). É perfeito para testes com família e amigos antes de pagar os $25 da Google.
+
+### ⚠️ Dica: Download no Celular (Erro "Ghost" ou 404)
+Se o seu repositório for **Privado**, o GitHub protege o download.
+- **Problema**: Ao clicar no link pelo WhatsApp/Telegram, ele pode abrir o "GitHub App" deslogado ou um navegador interno.
+- **Solução**:
+  1. Copie o link da Release.
+  2. Abra o **Chrome** no celular.
+  3. Garanta que você está **logado no GitHub** no navegador.
+  4. Cole o link.
+  O download deve começar na hora.
