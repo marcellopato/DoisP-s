@@ -39,12 +39,13 @@ jobs:
         keytool -genkeypair -v -keystore android.keystore -keyalg RSA -keysize 2048 -validity 10000 -alias android -dname "CN=DoisPes, OU=Finance, O=DoisPes, L=Unknown, S=Unknown, C=US" -storepass password -keypass password
         
         # Start local server to serve static assets (bypasses auth/URL issues)
-        python3 -m http.server 8080 &
+        # Force IPv4 binding to avoid ::1 (IPv6) connection errors
+        python3 -m http.server 8080 --bind 127.0.0.1 &
         sleep 5
         
         mkdir android-project
-        # Init project structure from LOCALHOST
-        yes | bubblewrap init --manifest http://localhost:8080/static/manifest.json --directory android-project --chromeUrl https://doispes.streamlit.app
+        # Init project structure from LOCALHOST (IPv4)
+        yes | bubblewrap init --manifest http://127.0.0.1:8080/static/manifest.json --directory android-project --chromeUrl https://doispes.streamlit.app
         
         # Overwrite with our custom TWA manifest (with signing keys)
         cp twa-manifest.json android-project/twa-manifest.json
