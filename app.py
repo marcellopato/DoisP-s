@@ -11,7 +11,7 @@ import requests
 import utils.importers as importers
 
 # --- CONFIGURAÇÃO DA MARCA DOIS PÉS ---
-st.set_page_config(page_title="DoisPés", layout="centered", page_icon="🦶")
+st.set_page_config(page_title="DoisPés", page_icon="dois-pes.png", layout="wide")
 
 # --- CONEXÃO SEGURA COM A NUVEM (SEGREDOS) ---
 try:
@@ -403,28 +403,104 @@ def wizard_flow():
 
 # --- DASHBOARD (CÓDIGO EXISTENTE REFATORADO) ---
 def render_debts_view():
-    st.title("💳 Dívidas & Parcelamentos")
+    st.title("💳 Gestão de Dívidas")
     
     family_id = st.session_state.family_id
     loans = db.collection('debts').where('family_id', '==', family_id).stream()
-    data = [d.to_dict() for d in loans]
+    data = [d.to_dict() | {'id': d.id} for d in loans]
     
     if data:
+        # --- HEADER METRICS ---
         df = pd.DataFrame(data)
-        total = df['total_value'].sum()
+        total_divida = df['total_value'].sum()
+        total_parcelas_mes = df['installment_value'].sum()
         
-        st.metric("Total em Dívidas", format_currency(total))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Confirmado", format_currency(total_divida), help="Soma total do que falta pagar")
+        c2.metric("Comprometimento Mensal", format_currency(total_parcelas_mes), help="Quanto sai do seu bolso todo mês só para dívidas")
+        c3.metric("Qtd. Dívidas", len(data), help="Número de contratos ativos")
         
-        st.dataframe(
-            df,
-            use_container_width=True,
-            column_config={
-                "description": "Descrição",
-                "total_value": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
-                "installment_value": st.column_config.NumberColumn("Valor Parcela", format="R$ %.2f"),
-                "remaining_installments": "Parcelas Restantes"
-            }
-        )
+        st.markdown("---")
+
+        # --- AI STRATEGIST ---
+        with st.expander("🤖 Consultor de Quitação (IA)", expanded=False):
+            st.write("A IA pode analisar suas dívidas e sugerir qual ordem de pagamento economiza mais juros (Método Avalanche vs Bola de Neve).")
+            if st.button("Gerar Estratégia de Pagamento"):
+                with st.spinner("Analisando contratos e valores..."):
+                    # Prepare data for AI
+                    debts_summary = "\n".join([f"- {d['description']}: R$ {d['total_value']} (Parcela R$ {d.get('installment_value',0)})" for d in data])
+                    
+                    prompt = f"""
+                    Atue como um especialista em recuperação de crédito. Analise essa lista de dívidas pessoais:
+                    {debts_summary}
+                    
+                    1. Identifique quais provavelmente têm os juros mais abusivos (ex: Crefisa, Cheque Especial, Cartão) e devem ser prioridade.
+                    2. Sugira uma estratégia de quitação (Avalanche ou Bola de Neve) explicando o porquê.
+                    3. Liste 3 perguntas que o usuário deve fazer ao credor para tentar negociar um desconto à vista.
+                    
+                    Seja direto e prático. Use formatação markdown.
+                    """
+                    
+                    model = genai.GenerativeModel('gemini-2.0-flash')
+                    try:
+                        response = model.generate_content(prompt)
+                        st.markdown(response.text)
+                    except Exception as e:
+                        st.error(f"Erro na análise: {e}")
+
+        st.markdown("### 📋 Seus Contratos")
+        
+        # --- CARDS GRID ---
+        # Sort by value descending to show biggest first
+        data_sorted = sorted(data, key=lambda x: x['total_value'], reverse=True)
+        
+        for debt in data_sorted:
+            # Determine card color/style based on severity (heuristic)
+            val = debt['total_value']
+            color_border = "#3498db" # Blue default
+            icon = "📄"
+            
+            if val > 5000:
+                color_border = "#e74c3c" # Red
+                icon = "🚨"
+            elif val > 1000:
+                color_border = "#f39c12" # Orange
+                icon = "⚠️"
+            
+            restam = debt.get('remaining_installments', 1)
+            inst_val = debt.get('installment_value', 0)
+            
+            with st.container():
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #262730; 
+                        padding: 15px; 
+                        border-radius: 8px; 
+                        border-left: 5px solid {color_border};
+                        margin-bottom: 15px;
+                    ">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h3 style="margin: 0; font-size: 18px; color: white;">{icon} {debt['description']}</h3>
+                            <span style="background-color: #e74c3c; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px;">R$ {val:,.2f}</span>
+                        </div>
+                        <div style="display: flex; gap: 20px; margin-top: 10px; color: #cccccc; font-size: 14px;">
+                            <span>📦 Parcela: <b>R$ {inst_val:,.2f}</b></span>
+                            <span>⏳ Restam: <b>{restam}x</b></span>
+                        </div>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+                
+                # Context Actions
+                c_act1, c_act2 = st.columns([1, 4])
+                if c_act1.button("🗑️", key=f"del_{debt['id']}", help="Excluir dívida"):
+                    db.collection('debts').document(debt['id']).delete()
+                    st.rerun()
+                
+                # Placeholder for negotiation status styling (could be a badge in future)
+
     else:
         st.info("Nenhuma dívida cadastrada (Amém? 🙏)")
 
@@ -433,23 +509,92 @@ def render_recurring_view():
     
     family_id = st.session_state.family_id
     recs = db.collection('recurring_expenses').where('family_id', '==', family_id).stream()
-    data = [r.to_dict() for r in recs]
+    data = [r.to_dict() | {'id': r.id} for r in recs]
     
     if data:
         df = pd.DataFrame(data)
         total_monthly = df['amount'].sum()
         
-        st.metric("Custo Fixo Mensal", format_currency(total_monthly))
+        # --- METRICS ---
+        c1, c2 = st.columns(2)
+        c1.metric("Custo Fixo Mensal", format_currency(total_monthly), help="Total que sai todo mês")
+        c2.metric("Qtd. Contas", len(data))
         
-        st.dataframe(
-            df,
-            use_container_width=True,
-            column_config={
-                "description": "Descrição",
-                "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
-                "due_day": st.column_config.NumberColumn("Dia Vencimento", format="%d")
-            }
-        )
+        st.markdown("---")
+        
+        # --- COLOR LOGIC ---
+        # Palette of nice UI colors
+        palette = ["#3498db", "#9b59b6", "#e67e22", "#1abc9c", "#f1c40f", "#e74c3c", "#34495e", "#2ecc71"]
+        
+        # Assign a distinct color from palette to each description
+        colors = {}
+        for i, desc in enumerate(df['description'].unique()):
+            colors[desc] = palette[i % len(palette)]
+            
+        df['color'] = df['description'].map(colors)
+
+        # --- CHARTS ---
+        col_chart, col_list = st.columns([1, 1])
+        
+        with col_chart:
+            st.subheader("🍰 Onde gasto meu fixo?")
+            fig = px.pie(
+                df, 
+                values='amount', 
+                names='description', 
+                hole=0.4,
+                color='description',
+                color_discrete_map=colors
+            )
+            fig.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0))
+            st.plotly_chart(fig, use_container_width=True)
+            
+        with col_list:
+            st.subheader("🗓️ Lista de Contas")
+            # Sort by Day
+            df_sorted = df.sort_values('due_day')
+            
+            for index, row in df_sorted.iterrows():
+                val = row['amount']
+                
+                # SEVERITY INDICATOR (Inner Badge)
+                severity_icon = "🔵" # Normal
+                if val > 1000: severity_icon = "🔴" # High
+                elif val > 500: severity_icon = "🟠" # Medium
+                
+                icon = "📅"
+                if val > 1000: icon = "🏠"
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #262730; 
+                        padding: 10px 15px; 
+                        border-radius: 8px; 
+                        border-left: 5px solid {row['color']};
+                        margin-bottom: 10px;
+                        display: flex; justify-content: space-between; align-items: center;
+                    ">
+                        <div>
+                            <div style="font-size: 16px; font-weight: bold; color: white;">
+                                {icon} {row['description']}
+                            </div>
+                            <div style="font-size: 13px; color: #aaaaaa; margin-top: 2px;">
+                                Vence dia {int(row['due_day'])}
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="font-size: 18px; color: #ecf0f1; font-weight: bold;">
+                                {format_currency(row['amount'])}
+                            </div>
+                            <div style="font-size: 12px; margin-top: 2px;">
+                                {severity_icon}
+                            </div>
+                        </div>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
     else:
         st.info("Nenhuma conta recorrente cadastrada.")
 
@@ -635,7 +780,7 @@ def render_import_view():
 def main_dashboard():
     # --- SIDEBAR NAVIGATION ---
     with st.sidebar:
-        st.title("DoisPés 🦶")
+        st.image("dois-pes.png", width=120)
         st.caption(f"Família: {st.session_state.family_id}")
         
         # Default menu
@@ -673,9 +818,86 @@ def main_dashboard():
     elif menu == "Cartões":
         render_cards_view()
     elif menu == "Perfil":
-        st.title("👤 Meu Perfil")
-        st.write(f"**Email:** {st.session_state.email}")
-        st.write(f"**Família:** {st.session_state.family_id}")
+        render_profile_view()
+
+def render_profile_view():
+    st.title("👤 Meu Perfil")
+    
+    # User Data
+    user_ref = db.collection('users').document(st.session_state.user_id)
+    user_doc = user_ref.get()
+    user_data = user_doc.to_dict() if user_doc.exists else {}
+    
+    col_l, col_r = st.columns([1, 2])
+    
+    with col_l:
+        # Avatar Logic
+        current_avatar = user_data.get('avatar_base64')
+        if current_avatar:
+            import base64
+            from io import BytesIO
+            from PIL import Image
+            
+            # Decode for display
+            try:
+                msg = base64.b64decode(current_avatar)
+                buf = BytesIO(msg)
+                img = Image.open(buf)
+                st.image(img, width=150)
+            except:
+                st.error("Erro ao carregar avatar.")
+                st.image("https://www.w3schools.com/howto/img_avatar.png", width=150)
+        else:
+            st.image("https://www.w3schools.com/howto/img_avatar.png", width=150)
+            
+        # Upload
+        new_avatar = st.file_uploader("Trocar foto", type=['png', 'jpg', 'jpeg'])
+        if new_avatar:
+            if st.button("Salvar Nova Foto"):
+                try:
+                    from PIL import Image
+                    import io
+                    import base64
+                    
+                    image = Image.open(new_avatar)
+                    
+                    # Resize to optimized thumbnail
+                    image.thumbnail((200, 200))
+                    
+                    # Convert to base64
+                    buffered = io.BytesIO()
+                    image.save(buffered, format="JPEG", quality=80) # Compress
+                    img_str = base64.b64encode(buffered.getvalue()).decode()
+                    
+                    # Save to DB
+                    user_ref.update({'avatar_base64': img_str})
+                    st.session_state.user_avatar = img_str # Update session
+                    st.success("Avatar atualizado!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao processar imagem: {e}")
+
+    with col_r:
+        st.subheader("Dados Pessoais")
+        st.caption("ID da Família")
+        st.code(st.session_state.family_id)
+        
+        st.caption("Email")
+        st.text_input("Email", value=st.session_state.email, disabled=True)
+        
+        # Additional fields
+        name_val = st.text_input("Nome de Exibição", value=user_data.get('name', ''), placeholder="Como você quer ser chamado?")
+        income = st.number_input("Renda Mensal (R$)", value=float(user_data.get('income', 0.0)))
+        goals = st.text_area("Objetivo Financeiro", value=user_data.get('goals', ''), placeholder="Ex: Comprar um carro, Aposentar cedo...")
+        
+        if st.button("💾 Atualizar Perfil"):
+            user_ref.update({
+                'name': name_val,
+                'income': income,
+                'goals': goals
+            })
+            st.session_state.user_name = name_val # Update session immediately
+            st.success("Dados salvos!")
 
 def render_launch_view():
     st.title("💸 Novo Lançamento")
@@ -778,57 +1000,182 @@ def render_launch_view():
     st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
 
 
+# --- AI SERVICES ---
+def get_daily_briefing(family_id, user_name, rec_expenses, debts_total, current_balance):
+    """
+    Gera ou recupera o briefing diário da IA.
+    Chave: YYYY-MM-DD_{family_id}
+    """
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    doc_id = f"{today_str}_{family_id}"
+    
+    doc_ref = db.collection('daily_briefings').document(doc_id)
+    doc = doc_ref.get()
+    
+    if doc.exists:
+        return doc.to_dict()['content']
+    
+    # Se não existe, gerar novo
+    with st.spinner("🤖 O Consultor IA está preparando seu resumo matinal..."):
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Prepare context
+        prompt = f"""
+        Você é um consultor financeiro pessoal, amigável e motivador. O usuário é {user_name}.
+        Data de hoje: {today_str}.
+        
+        PANORAMA FINANCEIRO:
+        - Saldo Atual em Conta: {format_currency(current_balance)}
+        - Total de Dívidas (Longo Prazo): {format_currency(debts_total)}
+        - Contas Fixas Mensais: 
+          {', '.join([f"{r['description']} (Dia {r['due_day']})" for r in rec_expenses[:5]])} ... e mais {max(0, len(rec_expenses)-5)} contas.
+        
+        OBJETIVO:
+        Escreva um "Bom dia" curto e inspirador (max 3 parágrafos).
+        1. Comente sobre o saldo atual (dê um alerta sutil se negativo, ou parabéns se positivo).
+        2. Avise se tem alguma conta vencendo hoje ou amanhã (baseado no dia de hoje vs dia das contas fixas).
+        3. Dê uma dica rápida de economia baseada no contexto de ter dívidas (se tiver) ou de investir (se tiver sobrando).
+        
+        Tom de voz: Otimista, "Tamo junto", parceiro. Use emojis.
+        """
+        
+        try:
+            response = model.generate_content(prompt)
+            content = response.text
+            
+            # Save to cache
+            doc_ref.set({
+                'content': content,
+                'created_at': datetime.now(),
+                'family_id': family_id
+            })
+            return content
+        except Exception as e:
+            return f"Erro ao gerar briefing: {e}"
+
 def render_dashboard_home():
     # --- ÁREA PRINCIPAL ---
-    st.title(f"Olá, {st.session_state.email.split('@')[0]}!")
+    # Use name from session if available, else email fallback
+    display_name = st.session_state.get('user_name') or st.session_state.email.split('@')[0]
+    st.title(f"Olá, {display_name}!")
     
-    # --- 1. DADOS ---
     family_id = get_user_family_id()
     
-    # Logica de busca de dados
-    docs = db.collection('transactions').where("family_id", "==", family_id).stream()
-    data = [doc.to_dict() for doc in docs]
+    # 1. Fetch ALL Data needed for dashboard 2.0
+    # Transactions
+    docs_trans = db.collection('transactions').where("family_id", "==", family_id).stream()
+    trans_data = [doc.to_dict() for doc in docs_trans]
+    df_trans = pd.DataFrame(trans_data)
     
-    if data:
-        df = pd.DataFrame(data)
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date', ascending=False)
-        
-        rec = df[df['type']=='Receita']['value'].sum()
-        desp = df[df['type']=='Despesa']['value'].sum()
-        inv = df[df['type']=='Investimento']['value'].sum()
-        saldo = rec - desp - inv
-        
-        st.markdown("---")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Entradas", format_currency(rec))
-        c2.metric("Saídas", format_currency(desp), delta=format_currency(-desp), delta_color="inverse")
-        c3.metric("Saldo", format_currency(saldo), delta_color="normal" if saldo > 0 else "inverse")
-        
-        # Botão IA
-        if st.button("✨ Pedir análise ao Consultor IA"):
-            # Resgata profile do usuário para contexto extra
-            user_profile = db.collection('users').document(st.session_state.user_id).get().to_dict()
-            profile_txt = f"Renda: {user_profile.get('income', 0)}. Metas: {user_profile.get('goals', '')}"
-            
-            info_ia = f"Perfil: {profile_txt}. Dados Reais (já em reais): Receitas: {rec}, Despesas: {desp}, Saldo: {saldo}."
-            
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            try:
-                with st.spinner("Analisando..."):
-                    response = model.generate_content(f"Analise financeiramente: {info_ia}")
-                    st.info(response.text)
-            except Exception as e:
-                st.error(f"Erro na IA: {e}")
+    # Debts
+    docs_debts = db.collection('debts').where("family_id", "==", family_id).stream()
+    debts_data = [doc.to_dict() for doc in docs_debts]
+    total_debts = sum(d['total_value'] for d in debts_data)
+    
+    # Recurring
+    docs_rec = db.collection('recurring_expenses').where("family_id", "==", family_id).stream()
+    rec_data = [doc.to_dict() for doc in docs_rec]
+    total_rec_monthly = sum(r['amount'] for r in rec_data)
+    
+    # Calculate Balance
+    rec_val = 0.0
+    desp_val = 0.0
+    if not df_trans.empty:
+        df_trans['date'] = pd.to_datetime(df_trans['date'])
+        df_trans = df_trans.sort_values('date', ascending=False)
+        rec_val = df_trans[df_trans['type']=='Receita']['value'].sum()
+        desp_val = df_trans[df_trans['type']=='Despesa']['value'].sum()
+        inv_val = df_trans[df_trans['type']=='Investimento']['value'].sum()
+        saldo = rec_val - desp_val - inv_val
+    else:
+        saldo = 0.0
 
-        # Gráficos
-        tab1, tab2 = st.tabs(["Gráficos", "Extrato"])
+    # --- 2. AI MORNING BRIEFING ---
+    briefing = get_daily_briefing(family_id, st.session_state.email.split('@')[0], rec_data, total_debts, saldo)
+    st.info(briefing, icon="🌅")
+
+    # --- 3. METRICS ROW (CUSTOM CARDS) ---
+    def card(label, value, color, help_text=""):
+        st.markdown(
+            f"""
+            <div style="background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid {color}; margin-bottom: 10px;">
+                <p style="color: #AAAAAA; font-size: 12px; margin-bottom: 5px;">{label}</p>
+                <p style="color: {color}; font-size: 22px; font-weight: bold; margin: 0;">{value}</p>
+                <p style="color: #666666; font-size: 10px; margin-top: 5px;">{help_text}</p>
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
+    c1, c2, c3, c4 = st.columns(4)
+    
+    with c1:
+        color = "#3498db" if saldo >= 0 else "#e74c3c" # Blue if positive, Red if negative
+        card("Saldo Atual", format_currency(saldo), color, "Disponível em conta")
+        
+    with c2:
+        card("Saídas (Mês)", format_currency(desp_val), "#e74c3c", "Total de despesas do mês") # Red
+        
+    with c3:
+        # Dívidas são "apertos" -> Laranja/Amarelo forte
+        card("Dívidas Totais", format_currency(total_debts), "#f39c12", "Longo prazo (bancos, etc)")
+        
+    with c4:
+        # Custo fixo -> Laranja
+        card("Custo Fixo/Mês", format_currency(total_rec_monthly), "#d35400", "Contas recorrentes")
+    
+    st.markdown("---")
+    
+    # --- 4. CHARTS & UPCOMING ---
+    col_l, col_r = st.columns([2, 1])
+    
+    with col_l:
+        st.subheader("📊 Visão Geral")
+        tab1, tab2 = st.tabs(["Despesas do Mês", "Maiores Dívidas"])
+        
         with tab1:
-            if not df[df['type']=='Despesa'].empty:
-                st.plotly_chart(px.pie(df[df['type']=='Despesa'], values='value', names='category', hole=0.4), use_container_width=True)
+            if not df_trans.empty and not df_trans[df_trans['type']=='Despesa'].empty:
+                st.plotly_chart(px.pie(df_trans[df_trans['type']=='Despesa'], values='value', names='category', hole=0.4), use_container_width=True)
+            else:
+                st.write("Sem dados de despesas este mês.")
+                
         with tab2:
+            if debts_data:
+                df_debts = pd.DataFrame(debts_data)
+                # Sort by value
+                df_debts = df_debts.sort_values('total_value', ascending=False).head(5)
+                st.plotly_chart(px.bar(df_debts, x='description', y='total_value', title="Top 5 Dívidas"), use_container_width=True)
+            else:
+                st.write("Parabéns! Nenhuma dívida ativa.")
+
+    with col_r:
+        st.subheader("📅 Próximos Vencimentos")
+        # Logic to find upcoming recurring bills based on 'due_day'
+        today_day = datetime.now().day
+        
+        # Sort recurring by proximity to today
+        upcoming = []
+        for r in rec_data:
+            day = r['due_day']
+            # Simple logic: if due day is >= today, show it. If next month, ignore for this simple view
+            if day >= today_day:
+                upcoming.append(r)
+        
+        upcoming.sort(key=lambda x: x['due_day'])
+        
+        if upcoming:
+            for item in upcoming[:5]: # Show top 5
+                with st.container(border=True):
+                    st.write(f"**Dia {item['due_day']}**: {item['description']}")
+                    st.caption(format_currency(item['amount']))
+        else:
+            st.success("Tudo pago para este mês! 🎉")
+
+    # --- 5. EXTRATO ---
+    with st.expander("📜 Extrato Detalhado", expanded=False):
+        if not df_trans.empty:
             st.dataframe(
-                df[['date', 'description', 'value', 'type']], 
+                df_trans[['date', 'description', 'value', 'type']], 
                 use_container_width=True, 
                 hide_index=True,
                 column_config={
