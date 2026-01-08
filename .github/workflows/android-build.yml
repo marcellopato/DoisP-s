@@ -1,8 +1,10 @@
 name: Build Android TWA
 
 on:
-  release:
-    types: [created]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build-android:
