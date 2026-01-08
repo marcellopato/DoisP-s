@@ -6,10 +6,10 @@
 	"display": "standalone",
 	"orientation": "portrait",
 	"scope": "/",
-	"start_url": "/",
+	"start_url": "https://doispes.streamlit.app/",
 	"icons": [
 		{
-			"src": "app_icon.png",
+			"src": "https://doispes.streamlit.app/static/app_icon.png",
 			"sizes": "512x512",
 			"type": "image/png"
 		}
