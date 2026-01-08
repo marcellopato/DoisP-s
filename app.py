@@ -8,6 +8,7 @@ import google.generativeai as genai
 import json
 import re
 import requests
+import utils.importers as importers
 
 # --- CONFIGURAÇÃO DA MARCA DOIS PÉS ---
 st.set_page_config(page_title="DoisPés", layout="centered", page_icon="🦶")
@@ -401,128 +402,387 @@ def wizard_flow():
                 save_wizard_data(st.session_state.wizard_data)
 
 # --- DASHBOARD (CÓDIGO EXISTENTE REFATORADO) ---
-def main_dashboard():
-    # Sidebar
-    with st.sidebar:
-        st.header("DoisPés 🦶")
-        st.write(f"Usuário: **{st.session_state.email}**")
-        st.info(f"Família: {st.session_state.family_id}")
+def render_debts_view():
+    st.title("💳 Dívidas & Parcelamentos")
+    
+    family_id = st.session_state.family_id
+    loans = db.collection('debts').where('family_id', '==', family_id).stream()
+    data = [d.to_dict() for d in loans]
+    
+    if data:
+        df = pd.DataFrame(data)
+        total = df['total_value'].sum()
         
+        st.metric("Total em Dívidas", format_currency(total))
+        
+        st.dataframe(
+            df,
+            use_container_width=True,
+            column_config={
+                "description": "Descrição",
+                "total_value": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
+                "installment_value": st.column_config.NumberColumn("Valor Parcela", format="R$ %.2f"),
+                "remaining_installments": "Parcelas Restantes"
+            }
+        )
+    else:
+        st.info("Nenhuma dívida cadastrada (Amém? 🙏)")
+
+def render_recurring_view():
+    st.title("📅 Contas Fixas (Recorrentes)")
+    
+    family_id = st.session_state.family_id
+    recs = db.collection('recurring_expenses').where('family_id', '==', family_id).stream()
+    data = [r.to_dict() for r in recs]
+    
+    if data:
+        df = pd.DataFrame(data)
+        total_monthly = df['amount'].sum()
+        
+        st.metric("Custo Fixo Mensal", format_currency(total_monthly))
+        
+        st.dataframe(
+            df,
+            use_container_width=True,
+            column_config={
+                "description": "Descrição",
+                "amount": st.column_config.NumberColumn("Valor", format="R$ %.2f"),
+                "due_day": st.column_config.NumberColumn("Dia Vencimento", format="%d")
+            }
+        )
+    else:
+        st.info("Nenhuma conta recorrente cadastrada.")
 
 
-        st.divider()
-        if st.button("Sair"):
-            st.session_state.clear()
+def render_cards_view():
+    st.title("💳 Cartões de Crédito")
+    
+    # Form para adicionar cartão
+    with st.expander("➕ Adicionar Novo Cartão", expanded=False):
+        with st.form("new_card_form"):
+            col1, col2 = st.columns(2)
+            name = col1.text_input("Apelido do Cartão", placeholder="Ex: Nubank Roxinho")
+            limit = col2.number_input("Limite Total (R$)", min_value=0.0, step=100.0)
+            
+            col3, col4 = st.columns(2)
+            close_day = col3.number_input("Dia Fechamento", min_value=1, max_value=31, value=1)
+            due_day = col4.number_input("Dia Vencimento", min_value=1, max_value=31, value=10)
+            
+            if st.form_submit_button("Salvar Cartão"):
+                if name and limit > 0:
+                    ref = db.collection('credit_cards').document()
+                    ref.set({
+                        'name': name,
+                        'limit': limit,
+                        'closing_day': int(close_day),
+                        'due_day': int(due_day),
+                        'family_id': st.session_state.family_id,
+                        'user_id': st.session_state.user_id,
+                        'created_at': datetime.now()
+                    })
+                    st.success(f"Cartão {name} salvo!")
+                    st.rerun()
+                else:
+                    st.error("Preencha nome e limite.")
+
+    # Listar cartões
+    family_id = st.session_state.family_id
+    cards = db.collection('credit_cards').where('family_id', '==', family_id).stream()
+    data = [c.to_dict() | {'id': c.id} for c in cards] # Include ID
+    
+    if data:
+        st.subheader("Meus Cartões")
+        for card in data:
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                c1.markdown(f"### {card.get('name')}")
+                c1.caption(f"Fecha dia {card.get('closing_day')} • Vence dia {card.get('due_day')}")
+                
+                # Barra de limite (Simulação por enquanto, futuramente conectar com faturas)
+                limit_val = card.get('limit', 0)
+                used_val = 0 # TODO: Calcular gastos reais
+                
+                c1.progress(0, text=f"Limite: {format_currency(limit_val)}")
+                
+                if c2.button("🗑️", key=f"del_{card['id']}"):
+                    db.collection('credit_cards').document(card['id']).delete()
+                    st.rerun()
+    else:
+        st.info("Nenhum cartão cadastrado. Adicione um acima! 👆")
+
+
+def save_imported_data(items):
+    """Salva itens importados nas coleções apropriadas"""
+    batch = db.batch()
+    uid = st.session_state.user_id
+    family_id = st.session_state.family_id
+    
+    count_rec = 0
+    count_debt = 0
+    count_trans = 0
+    
+    for item in items:
+        # 1. Dívidas
+        if item['type'] == 'debt':
+            ref = db.collection('debts').document()
+            batch.set(ref, {
+                'description': item['description'],
+                'total_value': float(item['value']),
+                'remaining_installments': int(item.get('installments_count', 1)),
+                'installment_value': float(item.get('installment_value', item['value'])),
+                'family_id': family_id,
+                'user_id': uid,
+                'created_at': datetime.now()
+            })
+            count_debt += 1
+            
+        # 2. Despesas Fixas / Recorrentes
+        elif item['type'] == 'recurring':
+            ref = db.collection('recurring_expenses').document()
+            day = 1
+            if item.get('date'):
+                day = item['date'].day
+            
+            batch.set(ref, {
+                'description': item['description'],
+                'amount': float(item['value']),
+                'due_day': int(day),
+                'family_id': family_id,
+                'user_id': uid
+            })
+            count_rec += 1
+            
+        # 3. Transações (Despesas comuns)
+        else:
+            ref = db.collection('transactions').document()
+            date_val = datetime.now()
+            if item.get('date'):
+                # Converter date object para datetime
+                d = item['date']
+                date_val = datetime(d.year, d.month, d.day)
+                
+            batch.set(ref, {
+                'description': item['description'],
+                'value': float(item['value']),
+                'type': 'Despesa',
+                'category': 'Importado',
+                'date': date_val,
+                'family_id': family_id,
+                'user_name': st.session_state.get('user_name', 'User'),
+                'user_id': uid
+            })
+            count_trans += 1
+            
+    batch.commit()
+    st.success(f"✅ Importação concluída! Dívidas: {count_debt}, Fixas: {count_rec}, Transações: {count_trans}")
+    st.balloons()
+
+
+def render_import_view():
+    st.title("📥 Importar Dados")
+    
+    # Adicionar opção de limpar tudo para testes
+    with st.expander("⚠️ Zona de Perigo"):
+        if st.button("🗑️ Limpar TODO o Banco de Dados (Use com cautela)"):
+            uid = st.session_state.user_id
+            # Clean collections
+            for coll in ['transactions', 'debts', 'recurring_expenses']:
+                docs = db.collection(coll).where('user_id', '==', uid).stream()
+                for doc in docs:
+                    doc.reference.delete()
+            st.warning("Banco limpo!")
             st.rerun()
 
+    st.write("Importe suas contas a partir de arquivos XML ou use a IA para ler extratos.")
+    
+    if 'uploader_key_xml' not in st.session_state:
+        st.session_state.uploader_key_xml = 0
+
+    uploaded_file = st.file_uploader("📂 Selecione o arquivo XML (Excel 2003)", type=['xml'], key=f"xml_uploader_{st.session_state.uploader_key_xml}")
+    
+    if uploaded_file:
+        try:
+            # GARANTIR ponteiro no início
+            uploaded_file.seek(0)
+            content = uploaded_file.read().decode('utf-8')
+            
+            result = importers.parse_excel_xml(content)
+            
+            if "error" in result:
+                st.error(f"Erro ao ler arquivo: {result['error']}")
+            else:
+                items = result['items']
+                st.info(f"{len(items)} itens encontrados no arquivo.")
+                
+                # Preview matches logic
+                import pandas as pd
+                df = pd.DataFrame(items)
+                st.dataframe(df, use_container_width=True)
+                
+                if st.button("💾 Confirmar e Importar Tudo", type="primary"):
+                    print(f"Iniciando importação de {len(items)} itens...")
+                    save_imported_data(items)
+                    # Forçar reset do uploader mudando a key
+                    st.session_state.uploader_key_xml = st.session_state.get('uploader_key_xml', 0) + 1
+                    st.success("✅ Importação realizada com sucesso! Vá ao Dashboard para conferir.")
+                    if st.button("Ir para Dashboard"):
+                        st.rerun()
+
+        except Exception as e:
+            st.error(f"Erro inesperado: {e}")
+            print(f"Erro na importação: {e}")
+
+def main_dashboard():
+    # --- SIDEBAR NAVIGATION ---
+    with st.sidebar:
+        st.title("DoisPés 🦶")
+        st.caption(f"Família: {st.session_state.family_id}")
+        
+        # Default menu
+        if "menu_selection" not in st.session_state:
+            st.session_state.menu_selection = "Dashboard"
+
+        from streamlit_option_menu import option_menu
+        
+        menu = option_menu(
+            "Menu Principal",
+            ["Dashboard", "Lançamentos", "Dívidas", "Contas Fixas", "Importar Dados", "Cartões", "Perfil"],
+            icons=["house", "currency-dollar", "bank", "calendar-check", "cloud-upload", "credit-card", "person"],
+            menu_icon="cast",
+            default_index=0,
+            key="menu_selection"
+        )
+        
+        st.divider()
+        if st.button("Sair"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+    # --- ROUTING ---
+    if menu == "Dashboard":
+        render_dashboard_home()
+    elif menu == "Lançamentos":
+        render_launch_view()
+    elif menu == "Dívidas":
+        render_debts_view()
+    elif menu == "Contas Fixas":
+        render_recurring_view()
+    elif menu == "Importar Dados":
+        render_import_view()
+    elif menu == "Cartões":
+        render_cards_view()
+    elif menu == "Perfil":
+        st.title("👤 Meu Perfil")
+        st.write(f"**Email:** {st.session_state.email}")
+        st.write(f"**Família:** {st.session_state.family_id}")
+
+def render_launch_view():
+    st.title("💸 Novo Lançamento")
+    
+    # AI Upload Section
+    if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
+    uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"], key=f"uploader_{st.session_state.uploader_key}")
+    
+    if 'new_launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
+    if 'new_launch_desc' not in st.session_state: st.session_state.new_launch_desc = ""
+    if 'new_launch_cat' not in st.session_state: st.session_state.new_launch_cat = "Outros"
+    if 'new_launch_type' not in st.session_state: st.session_state.new_launch_type = "Despesa"
+
+    if uploaded_file:
+        # Check if this file was already analyzed to avoid re-running on every interaction
+        # We use the key to track uniqueness combined with filename
+        current_file_id = f"{st.session_state.uploader_key}_{uploaded_file.name}"
+        
+        if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != current_file_id:
+            with st.spinner("🤖 A IA está lendo seu comprovante..."):
+                try:
+                    import PIL.Image
+                    
+                    if uploaded_file.type == "application/pdf":
+                        st.warning("⚠️ Suporte a PDF em breve! Por favor use imagem (JPG/PNG).")
+                    else:
+                        img = PIL.Image.open(uploaded_file)
+                        st.image(img, caption='Comprovante', width=200)
+                        
+                        # Gemini Call
+                        model = genai.GenerativeModel('gemini-2.0-flash')
+                        prompt = """
+                        Analise esta imagem de comprovante/recibo financeiro e extraia um JSON:
+                        {
+                            "value": float (valor total, use ponto para decimais),
+                            "description": string (nome do estabelecimento ou resumo curto),
+                            "category": string (escolha uma: Casa, Mercado, Lazer, Transporte, Salário, Investimento, Outros),
+                            "type": string (escolha uma: Despesa, Receita, Investimento),
+                            "date": string (formato YYYY-MM-DD)
+                        }
+                        Se não encontrar algo, deixe null. Responda APENAS o JSON.
+                        """
+                        response = model.generate_content([prompt, img])
+                        
+                        # Clean json
+                        text = response.text.replace("```json", "").replace("```", "").strip()
+                        data_ai = json.loads(text)
+                        
+                        if data_ai:
+                            st.session_state.new_launch_val = float(data_ai.get('value', 0.0) or 0.0)
+                            st.session_state.new_launch_desc = data_ai.get('description', "") or ""
+                            
+                            category = data_ai.get('category')
+                            if category in ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"]:
+                                st.session_state.new_launch_cat = category
+                            
+                            type_ = data_ai.get('type')
+                            if type_ in ["Despesa", "Receita", "Investimento"]:
+                                st.session_state.new_launch_type = type_
+                            
+                            st.session_state.last_analyzed_file = current_file_id
+                            st.success("✅ Dados extraídos! Confira abaixo.")
+                            st.rerun() # Rerun to update widgets with new session state values
+
+                except Exception as e:
+                    st.error(f"Erro na leitura da IA: {e}")
+
+    col1, col2 = st.columns(2)
+    
+    # Widgets linked to session_state keys
+    tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"], key="new_launch_type")
+    valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f", key="new_launch_val")
+    
+    col3, col4 = st.columns(2)
+    desc = col3.text_input("Descrição", key="new_launch_desc")
+    cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"], key="new_launch_cat")
+    
+    def save_transaction():
+        db.collection('transactions').add({
+            'family_id': st.session_state.family_id,
+            'user_name': st.session_state.email.split('@')[0],
+            'type': st.session_state.new_launch_type,
+            'value': float(st.session_state.new_launch_val),
+            'description': st.session_state.new_launch_desc,
+            'category': st.session_state.new_launch_cat,
+            'date': datetime.combine(datetime.now(), datetime.min.time())
+        })
+        
+        # Reset form safely in callback
+        st.session_state.new_launch_val = 0.0
+        st.session_state.new_launch_desc = ""
+        if 'last_analyzed_file' in st.session_state:
+            del st.session_state.last_analyzed_file
+        
+        # Increment uploader key to wipe the file uploader widget
+        st.session_state.uploader_key += 1
+        
+        st.toast("Salvo!")
+
+    st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
+
+
+def render_dashboard_home():
     # --- ÁREA PRINCIPAL ---
     st.title(f"Olá, {st.session_state.email.split('@')[0]}!")
     
-
-
-    # --- 1. ADICIONAR ---
-    # --- 1. ADICIONAR ---
-    with st.expander("💸 Novo Lançamento", expanded=True):
-        # AI Upload Section
-        if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
-        uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"], key=f"uploader_{st.session_state.uploader_key}")
-        
-        # Initialize form state if not present
-        if 'new_launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
-        if 'new_launch_desc' not in st.session_state: st.session_state.new_launch_desc = ""
-        if 'new_launch_cat' not in st.session_state: st.session_state.new_launch_cat = "Outros"
-        if 'new_launch_type' not in st.session_state: st.session_state.new_launch_type = "Despesa"
-
-        if uploaded_file:
-            # Check if this file was already analyzed to avoid re-running on every interaction
-            # We use the key to track uniqueness combined with filename
-            current_file_id = f"{st.session_state.uploader_key}_{uploaded_file.name}"
-            
-            if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != current_file_id:
-                with st.spinner("🤖 A IA está lendo seu comprovante..."):
-                    try:
-                        import PIL.Image
-                        
-                        if uploaded_file.type == "application/pdf":
-                            st.warning("⚠️ Suporte a PDF em breve! Por favor use imagem (JPG/PNG).")
-                        else:
-                            img = PIL.Image.open(uploaded_file)
-                            st.image(img, caption='Comprovante', width=200)
-                            
-                            # Gemini Call
-                            model = genai.GenerativeModel('gemini-2.0-flash')
-                            prompt = """
-                            Analise esta imagem de comprovante/recibo financeiro e extraia um JSON:
-                            {
-                                "value": float (valor total, use ponto para decimais),
-                                "description": string (nome do estabelecimento ou resumo curto),
-                                "category": string (escolha uma: Casa, Mercado, Lazer, Transporte, Salário, Investimento, Outros),
-                                "type": string (escolha uma: Despesa, Receita, Investimento),
-                                "date": string (formato YYYY-MM-DD)
-                            }
-                            Se não encontrar algo, deixe null. Responda APENAS o JSON.
-                            """
-                            response = model.generate_content([prompt, img])
-                            
-                            # Clean json
-                            text = response.text.replace("```json", "").replace("```", "").strip()
-                            data_ai = json.loads(text)
-                            
-                            if data_ai:
-                                st.session_state.new_launch_val = float(data_ai.get('value', 0.0) or 0.0)
-                                st.session_state.new_launch_desc = data_ai.get('description', "") or ""
-                                
-                                category = data_ai.get('category')
-                                if category in ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"]:
-                                    st.session_state.new_launch_cat = category
-                                
-                                type_ = data_ai.get('type')
-                                if type_ in ["Despesa", "Receita", "Investimento"]:
-                                    st.session_state.new_launch_type = type_
-                                
-                                st.session_state.last_analyzed_file = current_file_id
-                                st.success("✅ Dados extraídos! Confira abaixo.")
-                                st.rerun() # Rerun to update widgets with new session state values
-
-                    except Exception as e:
-                        st.error(f"Erro na leitura da IA: {e}")
-
-        col1, col2 = st.columns(2)
-        
-        # Widgets linked to session_state keys
-        tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"], key="new_launch_type")
-        valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f", key="new_launch_val")
-        
-        col3, col4 = st.columns(2)
-        desc = col3.text_input("Descrição", key="new_launch_desc")
-        cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"], key="new_launch_cat")
-        
-        def save_transaction():
-            db.collection('transactions').add({
-                'family_id': st.session_state.family_id,
-                'user_name': st.session_state.email.split('@')[0],
-                'type': st.session_state.new_launch_type,
-                'value': float(st.session_state.new_launch_val),
-                'description': st.session_state.new_launch_desc,
-                'category': st.session_state.new_launch_cat,
-                'date': datetime.combine(datetime.now(), datetime.min.time())
-            })
-            
-            # Reset form safely in callback
-            st.session_state.new_launch_val = 0.0
-            st.session_state.new_launch_desc = ""
-            if 'last_analyzed_file' in st.session_state:
-                del st.session_state.last_analyzed_file
-            
-            # Increment uploader key to wipe the file uploader widget
-            st.session_state.uploader_key += 1
-            
-            st.toast("Salvo!")
-
-        st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
-
-    # --- 2. DADOS ---
-    # Buscar family_id com validação de autorização
+    # --- 1. DADOS ---
     family_id = get_user_family_id()
     
     # Logica de busca de dados
