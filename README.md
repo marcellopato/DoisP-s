@@ -1,4 +1,5 @@
-# DoisPés 🦶🦶
+# <img src="dois-pes.png" alt="DoisPés Logo" width="100" style="vertical-align: middle;"> DoisPés
+
 
 **Finanças a dois, futuro de milhões.**
 

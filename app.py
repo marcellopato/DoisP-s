@@ -903,102 +903,137 @@ def render_profile_view():
 def render_launch_view():
     st.title("💸 Novo Lançamento")
     
-    # AI Upload Section
-    if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
-    uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"], key=f"uploader_{st.session_state.uploader_key}")
+    # Create Tabs for different launch types
+    tab1, tab2 = st.tabs(["📝 Transação Simples", "💳 Nova Dívida / Parcelamento"])
     
-    if 'new_launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
-    if 'new_launch_desc' not in st.session_state: st.session_state.new_launch_desc = ""
-    if 'new_launch_cat' not in st.session_state: st.session_state.new_launch_cat = "Outros"
-    if 'new_launch_type' not in st.session_state: st.session_state.new_launch_type = "Despesa"
-
-    if uploaded_file:
-        # Check if this file was already analyzed to avoid re-running on every interaction
-        # We use the key to track uniqueness combined with filename
-        current_file_id = f"{st.session_state.uploader_key}_{uploaded_file.name}"
+    # --- TAB 1: SIMPLE TRANSACTION (EXISTING LOGIC) ---
+    with tab1:
+        # AI Upload Section
+        if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
+        uploaded_file = st.file_uploader("📸 Foto da Conta ou Recibo (IA)", type=["jpg", "png", "jpeg", "webp", "pdf"], key=f"uploader_{st.session_state.uploader_key}")
         
-        if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != current_file_id:
-            with st.spinner("🤖 A IA está lendo seu comprovante..."):
-                try:
-                    import PIL.Image
-                    
-                    if uploaded_file.type == "application/pdf":
-                        st.warning("⚠️ Suporte a PDF em breve! Por favor use imagem (JPG/PNG).")
-                    else:
-                        img = PIL.Image.open(uploaded_file)
-                        st.image(img, caption='Comprovante', width=200)
+        if 'new_launch_val' not in st.session_state: st.session_state.new_launch_val = 0.0
+        if 'new_launch_desc' not in st.session_state: st.session_state.new_launch_desc = ""
+        if 'new_launch_cat' not in st.session_state: st.session_state.new_launch_cat = "Outros"
+        if 'new_launch_type' not in st.session_state: st.session_state.new_launch_type = "Despesa"
+
+        if uploaded_file:
+            # Check if this file was already analyzed to avoid re-running on every interaction
+            # We use the key to track uniqueness combined with filename
+            current_file_id = f"{st.session_state.uploader_key}_{uploaded_file.name}"
+            
+            if 'last_analyzed_file' not in st.session_state or st.session_state.last_analyzed_file != current_file_id:
+                with st.spinner("🤖 A IA está lendo seu comprovante..."):
+                    try:
+                        import PIL.Image
                         
-                        # Gemini Call
-                        model = genai.GenerativeModel('gemini-2.0-flash')
-                        prompt = """
-                        Analise esta imagem de comprovante/recibo financeiro e extraia um JSON:
-                        {
-                            "value": float (valor total, use ponto para decimais),
-                            "description": string (nome do estabelecimento ou resumo curto),
-                            "category": string (escolha uma: Casa, Mercado, Lazer, Transporte, Salário, Investimento, Outros),
-                            "type": string (escolha uma: Despesa, Receita, Investimento),
-                            "date": string (formato YYYY-MM-DD)
-                        }
-                        Se não encontrar algo, deixe null. Responda APENAS o JSON.
-                        """
-                        response = model.generate_content([prompt, img])
-                        
-                        # Clean json
-                        text = response.text.replace("```json", "").replace("```", "").strip()
-                        data_ai = json.loads(text)
-                        
-                        if data_ai:
-                            st.session_state.new_launch_val = float(data_ai.get('value', 0.0) or 0.0)
-                            st.session_state.new_launch_desc = data_ai.get('description', "") or ""
+                        if uploaded_file.type == "application/pdf":
+                            st.warning("⚠️ Suporte a PDF em breve! Por favor use imagem (JPG/PNG).")
+                        else:
+                            img = PIL.Image.open(uploaded_file)
+                            st.image(img, caption='Comprovante', width=200)
                             
-                            category = data_ai.get('category')
-                            if category in ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"]:
-                                st.session_state.new_launch_cat = category
+                            # Gemini Call
+                            model = genai.GenerativeModel('gemini-2.0-flash')
+                            prompt = """
+                            Analise esta imagem de comprovante/recibo financeiro e extraia um JSON:
+                            {
+                                "value": float (valor total, use ponto para decimais),
+                                "description": string (nome do estabelecimento ou resumo curto),
+                                "category": string (escolha uma: Casa, Mercado, Lazer, Transporte, Salário, Investimento, Outros),
+                                "type": string (escolha uma: Despesa, Receita, Investimento),
+                                "date": string (formato YYYY-MM-DD)
+                            }
+                            Se não encontrar algo, deixe null. Responda APENAS o JSON.
+                            """
+                            response = model.generate_content([prompt, img])
                             
-                            type_ = data_ai.get('type')
-                            if type_ in ["Despesa", "Receita", "Investimento"]:
-                                st.session_state.new_launch_type = type_
+                            # Clean json
+                            text = response.text.replace("```json", "").replace("```", "").strip()
+                            data_ai = json.loads(text)
                             
-                            st.session_state.last_analyzed_file = current_file_id
-                            st.success("✅ Dados extraídos! Confira abaixo.")
-                            st.rerun() # Rerun to update widgets with new session state values
+                            if data_ai:
+                                st.session_state.new_launch_val = float(data_ai.get('value', 0.0) or 0.0)
+                                st.session_state.new_launch_desc = data_ai.get('description', "") or ""
+                                
+                                category = data_ai.get('category')
+                                if category in ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"]:
+                                    st.session_state.new_launch_cat = category
+                                
+                                type_ = data_ai.get('type')
+                                if type_ in ["Despesa", "Receita", "Investimento"]:
+                                    st.session_state.new_launch_type = type_
+                                
+                                st.session_state.last_analyzed_file = current_file_id
+                                st.success("✅ Dados extraídos! Confira abaixo.")
+                                st.rerun() # Rerun to update widgets with new session state values
 
-                except Exception as e:
-                    st.error(f"Erro na leitura da IA: {e}")
+                    except Exception as e:
+                        st.error(f"Erro na leitura da IA: {e}")
 
-    col1, col2 = st.columns(2)
-    
-    # Widgets linked to session_state keys
-    tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"], key="new_launch_type")
-    valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f", key="new_launch_val")
-    
-    col3, col4 = st.columns(2)
-    desc = col3.text_input("Descrição", key="new_launch_desc")
-    cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"], key="new_launch_cat")
-    
-    def save_transaction():
-        db.collection('transactions').add({
-            'family_id': st.session_state.family_id,
-            'user_name': st.session_state.email.split('@')[0],
-            'type': st.session_state.new_launch_type,
-            'value': float(st.session_state.new_launch_val),
-            'description': st.session_state.new_launch_desc,
-            'category': st.session_state.new_launch_cat,
-            'date': datetime.combine(datetime.now(), datetime.min.time())
-        })
+        col1, col2 = st.columns(2)
         
-        # Reset form safely in callback
-        st.session_state.new_launch_val = 0.0
-        st.session_state.new_launch_desc = ""
-        if 'last_analyzed_file' in st.session_state:
-            del st.session_state.last_analyzed_file
+        # Widgets linked to session_state keys
+        tipo = col1.selectbox("Tipo", ["Despesa", "Receita", "Investimento"], key="new_launch_type")
+        valor = col2.number_input("Valor (R$)", min_value=0.0, step=10.0, format="%.2f", key="new_launch_val")
         
-        # Increment uploader key to wipe the file uploader widget
-        st.session_state.uploader_key += 1
+        col3, col4 = st.columns(2)
+        desc = col3.text_input("Descrição", key="new_launch_desc")
+        cat = col4.selectbox("Categoria", ["Casa", "Mercado", "Lazer", "Transporte", "Salário", "Investimento", "Outros"], key="new_launch_cat")
         
-        st.toast("Salvo!")
+        def save_transaction():
+            db.collection('transactions').add({
+                'family_id': st.session_state.family_id,
+                'user_name': st.session_state.email.split('@')[0],
+                'type': st.session_state.new_launch_type,
+                'value': float(st.session_state.new_launch_val),
+                'description': st.session_state.new_launch_desc,
+                'category': st.session_state.new_launch_cat,
+                'date': datetime.combine(datetime.now(), datetime.min.time())
+            })
+            
+            # Reset form safely in callback
+            st.session_state.new_launch_val = 0.0
+            st.session_state.new_launch_desc = ""
+            if 'last_analyzed_file' in st.session_state:
+                del st.session_state.last_analyzed_file
+            
+            # Increment uploader key to wipe the file uploader widget
+            st.session_state.uploader_key += 1
+            
+            st.toast("Transação Salva!")
 
-    st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
+        st.button("Salvar Lançamento", use_container_width=True, on_click=save_transaction)
+
+    # --- TAB 2: REGISTER DEBT ---
+    with tab2:
+        st.info("Cadastre dívidas parceladas ou empréstimos de longo prazo.")
+        
+        d_desc = st.text_input("Credor / Descrição", placeholder="Ex: Empréstimo Itaú, Compra TV")
+        
+        c_d1, c_d2 = st.columns(2)
+        d_total = c_d1.number_input("Valor Total Devido (R$)", min_value=0.0, step=100.0)
+        d_installments = c_d2.number_input("Nº de Parcelas", min_value=1, step=1, value=12)
+        
+        # Auto calculate installment
+        calc_installment = d_total / d_installments if d_installments > 0 else 0
+        d_inst_val = st.number_input(f"Valor da Parcela (Calc: R$ {calc_installment:.2f})", value=calc_installment, min_value=0.0, step=10.0)
+        
+        if st.button("💾 Salvar Dívida", use_container_width=True):
+            if d_desc and d_total > 0:
+                db.collection('debts').add({
+                    'family_id': st.session_state.family_id,
+                    'user_id': st.session_state.user_id,
+                    'description': d_desc,
+                    'total_value': d_total,
+                    'installment_value': d_inst_val,
+                    'remaining_installments': d_installments,
+                    'created_at': datetime.now()
+                })
+                st.success("Dívida cadastrada com sucesso!")
+                st.toast("Dívida Salva!")
+            else:
+                st.error("Preencha a descrição e o valor total.")
 
 
 # --- AI SERVICES ---
@@ -1235,8 +1270,12 @@ def render_dashboard_home():
 
 if 'user_id' not in st.session_state:
     # TELA DE LOGIN
-    st.title("🦶🦶 DoisPés")
-    st.caption("Finanças a dois, futuro de milhões.")
+    c1, c2 = st.columns([1, 4])
+    with c1:
+        st.image("dois-pes.png", width=80)
+    with c2:
+        st.title("DoisPés")
+        st.caption("Finanças a dois, futuro de milhões.")
     
     tab1, tab2, tab3 = st.tabs(["Entrar", "Nova Conta", "Esqueci a Senha"])
     
